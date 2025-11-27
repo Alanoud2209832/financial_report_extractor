@@ -280,7 +280,9 @@ def main():
                         display_content.append(f"**{display_key}**: {display_value}")
                     
                     # 🐞 الإصلاح: تم تصحيح njoin إلى join
-                    st.markdown('\n'.join(display_content))
+                    # 🚀 التعديل لحل مشكلة انعكاس النص (RTL) بعد الدمج
+                    final_display_text = '\n'.join(display_content)
+                    st.markdown(fix_arabic(final_display_text))
 
                     st.markdown("---")
                     
