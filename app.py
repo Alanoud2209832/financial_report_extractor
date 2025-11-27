@@ -17,7 +17,7 @@ import xlsxwriter
 
 # 🚨 هام: قم بتعيين مفتاح API الخاص بكِ هنا!
 # المفتاح السابق تم تعطيله أمنياً. يرجى لصق مفتاح جديد هنا وعدم مشاركته في الدردشة!
-GEMINI_API_KEY = "AIzaSyA3jr9tbNVYIbpV1yOQtg5dxS3lIuGtMag" # يرجى لصق المفتاح الجديد الصالح هنا!
+GEMINI_API_KEY = "" # يرجى لصق المفتاح الجديد الصالح هنا!
 
 # التهيئة الآمنة لعميل Gemini
 client = None
@@ -265,24 +265,27 @@ def main():
                 extracted_data = get_llm_multimodal_output(uploaded_file, client)
                 
                 if extracted_data:
-                    st.subheader(fix_arabic("✅ البيانات المستخلصة (تحقق سريع)"))
+                    # 🚀 التعديل 1: يتم عرض العنوان الفرعي بشكل صحيح
+                    st.markdown(f"<h3 style='text-align: right;'>{fix_arabic('✅ البيانات المستخلصة (تحقق سريع)')}</h3>", unsafe_allow_html=True)
                     
                     st.markdown("---")
                     
-                    # الحل: عرض البيانات باستخدام Markdown لضمان دعم أفضل لـ Bidi
-                    display_content = []
+                    # 🚀 التعديل 2: التكرار على كل حقل وعرضه بشكل منفصل لضمان تنسيق RTL وعرضه على سطر جديد
                     for key, value in extracted_data.items():
                         # نقوم بتشكيل (Reshape) كل من المفتاح والقيمة بشكل منفصل
                         display_key = fix_arabic(key)
                         display_value = fix_arabic(value)
                         
-                        # نستخدم Markdown لعرضها كنص عريض (مفتاح) ونص عادي (قيمة)
-                        display_content.append(f"**{display_key}**: {display_value}")
-                    
-                    # 🐞 الإصلاح: تم تصحيح njoin إلى join
-                    # 🚀 التعديل لحل مشكلة انعكاس النص (RTL) بعد الدمج
-                    final_display_text = '\n'.join(display_content)
-                    st.markdown(fix_arabic(final_display_text))
+                        # نستخدم HTML و CSS لفرض اتجاه RTL، عرض المفتاح بخط عريض، وجعل كل حقل في سطر جديد
+                        # استخدام وسم <p> مع الهوامش يضمن أن يكون كل حقل في سطر منفصل ومرتب.
+                        html_line = f"""
+                        <p style="direction: rtl; text-align: right; margin-bottom: 5px;">
+                            <span style="font-weight: bold; color: #1e40af;">{display_key}:</span>
+                            {display_value}
+                        </p>
+                        """
+                        st.markdown(html_line, unsafe_allow_html=True)
+
 
                     st.markdown("---")
                     
