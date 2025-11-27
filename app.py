@@ -19,7 +19,7 @@ import xlsxwriter
 # في هذه البيئة، سنضع المفتاح في متغير محلي لضمان التهيئة.
 # لقد قمت بإزالة المفتاح الفعلي وترك مكانه فارغاً للأمان، لكن يجب أن تضعيه هنا لتشغيل التطبيق.
 # مثال: GEMINI_API_KEY = "YOUR_API_KEY_HERE"
-GEMINI_API_KEY = "AIzaSyAyKZ9_Ew1HY187LBDzwkly6vsuHN8KHlc" # يجب تعبئة هذا المتغير بمفتاح صالح للتشغيل.
+GEMINI_API_KEY = "AIzaSyA3jr9tbNVYIbpV1yOQtg5dxS3lIuGtMag" # يجب تعبئة هذا المتغير بمفتاح صالح للتشغيل.
 
 # التهيئة الآمنة لعميل Gemini
 client = None
