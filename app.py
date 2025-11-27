@@ -15,15 +15,29 @@ import xlsxwriter
 # 1. إعدادات API والنصوص العربية
 # ----------------------------------------------------------------
 
-# التهيئة الآمنة لعميل Gemini (يعتمد على المفتاح المتاح في بيئة Canvas)
+# 🚨 هام: قم بتعيين مفتاح API الخاص بكِ هنا أو استخدم طريقة st.secrets عند النشر!
+# في هذه البيئة، سنضع المفتاح في متغير محلي لضمان التهيئة.
+# لقد قمت بإزالة المفتاح الفعلي وترك مكانه فارغاً للأمان، لكن يجب أن تضعيه هنا لتشغيل التطبيق.
+# مثال: GEMINI_API_KEY = "YOUR_API_KEY_HERE"
+GEMINI_API_KEY = "AIzaSyAyKZ9_Ew1HY187LBDzwkly6vsuHN8KHlc" # يجب تعبئة هذا المتغير بمفتاح صالح للتشغيل.
+
+# التهيئة الآمنة لعميل Gemini
 client = None
 try:
-    # نقوم بتهيئة العميل. سيقوم بالبحث عن المفتاح في متغيرات البيئة.
-    client = genai.Client() 
+    if GEMINI_API_KEY:
+        # استخدام المفتاح لتهيئة العميل بشكل صريح
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        os.environ['GEMINI_API_KEY'] = GEMINI_API_KEY
+    else:
+         # محاولة التهيئة بدون مفتاح (اعتماداً على متغيرات البيئة)
+         client = genai.Client()
 except Exception as e:
-    # رسالة خطأ مع معالجة النص العربي
     st.error(get_display(reshape(f"فشل في تهيئة عميل Gemini: {e}")))
 
+# التحقق النهائي من حالة العميل
+if client is None:
+    st.error(get_display(reshape("❌ فشل في تهيئة عميل Gemini. تأكدي من توفير مفتاح API صالح.")))
+    
 def fix_arabic(text):
     """يعالج النصوص العربية لضمان العرض الصحيح (من اليمين لليسار)."""
     if isinstance(text, str) and text:
@@ -38,10 +52,10 @@ def fix_arabic(text):
 def get_llm_multimodal_output(uploaded_file, client):
     """
     يرسل ملف PDF كبيانات مضمنة مباشرة لـ Gemini لاستخلاص الـ 20 حقلاً المحددة بتنسيق JSON.
-    (تم التعديل لاستخدام Inline Data بدلاً من client.files لتجنب الخطأ)
     """
+    # التحقق من أن العميل متاح قبل المتابعة
     if client is None:
-        st.error(fix_arabic("🚨 لا يمكن التواصل مع Gemini. الرجاء التحقق من تهيئة API."))
+        st.error(fix_arabic("🚨 لا يمكن التواصل مع Gemini. يرجى التحقق من توفير مفتاح API."))
         return None
 
     st.info(fix_arabic("⏳ جاري قراءة الملف وإرساله مباشرة لـ Gemini لبدء الاستخلاص..."))
@@ -50,14 +64,13 @@ def get_llm_multimodal_output(uploaded_file, client):
         # 1. قراءة محتوى الملف والميتا داتا
         uploaded_file.seek(0)
         file_bytes = uploaded_file.read()
-        mime_type = uploaded_file.type # يجب أن يكون 'application/pdf' أو غيره
+        mime_type = uploaded_file.type 
 
         if not mime_type or not mime_type.startswith(('application/pdf', 'image/')):
-            st.error(fix_arabic(f"صيغة الملف {mime_type} غير مدعومة للاستخلاص البصري. الرجاء تحميل PDF أو صورة."))
+            st.error(fix_arabic(f"صيغة الملف ({mime_type}) غير مدعومة للاستخلاص البصري. الرجاء تحميل PDF أو صورة."))
             return None
 
         # 2. إنشاء الجزء الخاص بالملف (File Part)
-        # نستخدم Part.from_bytes لدمج الملف مباشرة في محتويات الطلب
         file_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
 
         st.success(fix_arabic(f"✅ تم تجهيز الملف بنجاح ({uploaded_file.name})"))
@@ -131,7 +144,7 @@ def get_llm_multimodal_output(uploaded_file, client):
         # 5. إرسال الطلب (ملف كـ Part + نص المطالبة)
         response = client.models.generate_content(
             model='gemini-2.5-pro',
-            contents=[file_part, prompt_text],  # هنا نستخدم الجزء والبرومبت مباشرة
+            contents=[file_part, prompt_text],
             config=response_config
         )
 
@@ -154,10 +167,6 @@ def get_llm_multimodal_output(uploaded_file, client):
     except Exception as e:
         st.error(fix_arabic(f"🚨 خطأ غير متوقع أثناء الاستخلاص: {e}"))
         return None
-        
-    finally:
-        # لم يعد هناك ملفات مؤقتة لحذفها
-        pass
 
 
 # ----------------------------------------------------------------
@@ -190,10 +199,8 @@ def create_final_report(extracted_data):
     # ضمان وجود جميع الأعمدة المطلوبة في DataFrame بالترتيب الصحيح
     final_cols = []
     for col in column_order:
-        # إذا كان العمود موجوداً (وهذا هو المتوقع من مخرج Gemini)، نضيفه
         if col in df.columns:
             final_cols.append(col)
-        # إذا كان مفقوداً، نضيفه بقيم فارغة 
         else:
             df[col] = ''
             final_cols.append(col)
@@ -202,7 +209,6 @@ def create_final_report(extracted_data):
     df = df[final_cols]
     
     # تطبيق دالة fix_arabic على جميع القيم النصية قبل التصدير
-    # هنا يتم تطبيق Bidi على النص داخل خلايا Excel
     for col in df.columns:
         if df[col].dtype == 'object':
             df[col] = df[col].apply(lambda x: get_display(reshape(str(x))) if pd.notna(x) else x)
@@ -220,7 +226,6 @@ def create_final_report(extracted_data):
         worksheet.right_to_left()
 
         # تنسيق العمود 17 (سبب الاشتباه) ليكون ملتفاً وواسعاً
-        # أعمدة pandas تبدأ من 0، العمود 17 هو سبب الاشتباه
         col_format = workbook.add_format({'text_wrap': True, 'align': 'right', 'valign': 'top'})
         worksheet.set_column(17, 17, 60, col_format) 
         
@@ -242,7 +247,6 @@ def main():
     st.markdown(f"<h1 style='text-align: right;'>{fix_arabic('استخلاص التقارير المالية الآلي 🤖')}</h1>", unsafe_allow_html=True)
     st.markdown("---")
     
-    # قمنا بتضمين أنواع ملفات إضافية، لكننا نعتمد على Gemini لقراءة محتواها النصي
     uploaded_file = st.file_uploader(
         fix_arabic("📂 قم بتحميل ملف التقرير المالي (PDF/Excel) هنا:"),
         type=["pdf", "xlsx", "xls", "csv"],
