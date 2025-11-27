@@ -1,0 +1,6 @@
+streamlit==1.51.0
+google-genai==1.52.0
+pandas==2.2.2
+xlsxwriter==3.2.9
+arabic-reshaper==3.0.0
+python-bidi==0.6.7
