@@ -1,6 +1,6 @@
 streamlit
-google-genai
 pandas
-xlsxwriter
+google-genai
 arabic-reshaper
 python-bidi
+xlsxwriter
