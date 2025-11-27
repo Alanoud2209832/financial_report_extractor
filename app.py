@@ -49,7 +49,7 @@ def get_llm_multimodal_output(uploaded_file, client):
     pdf_file = None
     try:
         # 1. تحميل الملف إلى Gemini Files API
-        # *** تم إزالة display_name لتصحيح خطأ التوافق في Streamlit Cloud ***
+        # تم إزالة display_name لتصحيح خطأ التوافق
         pdf_file = client.files.upload(file=uploaded_file.read())
         st.success(fix_arabic(f"✅ تم تحميل الملف بنجاح كـ {pdf_file.name}"))
 
