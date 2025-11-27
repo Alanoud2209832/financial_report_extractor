@@ -211,6 +211,7 @@ def create_final_report(extracted_data):
     # تطبيق دالة fix_arabic على جميع القيم النصية قبل التصدير
     for col in df.columns:
         if df[col].dtype == 'object':
+            # هذا يضمن أن النص العربي سيكون صحيحاً داخل Excel
             df[col] = df[col].apply(lambda x: get_display(reshape(str(x))) if pd.notna(x) else x)
             
     # إنشاء مخرج Excel في الذاكرة
@@ -265,9 +266,23 @@ def main():
                 
                 if extracted_data:
                     st.subheader(fix_arabic("✅ البيانات المستخلصة (تحقق سريع)"))
-                    # نقوم بتطبيق fix_arabic على مفاتيح وقيم الـ JSON للعرض في Streamlit
-                    reshaped_data = {fix_arabic(k): fix_arabic(v) for k, v in extracted_data.items()}
-                    st.json(reshaped_data)
+                    
+                    st.markdown("---")
+                    
+                    # 💡 الحل: عرض البيانات باستخدام Markdown لضمان دعم أفضل لـ Bidi
+                    display_content = []
+                    for key, value in extracted_data.items():
+                        # نقوم بتشكيل (Reshape) كل من المفتاح والقيمة بشكل منفصل
+                        display_key = fix_arabic(key)
+                        display_value = fix_arabic(value)
+                        
+                        # نستخدم Markdown لعرضها كنص عريض (مفتاح) ونص عادي (قيمة)
+                        display_content.append(f"**{display_key}**: {display_value}")
+                    
+                    # عرض المحتوى المنسق
+                    st.markdown('\n'.njoin(display_content))
+
+                    st.markdown("---")
                     
                     excel_data_bytes = create_final_report(extracted_data)
                     
