@@ -9,8 +9,7 @@ import os
 import json
 import io
 import time 
-# 🚨 هذه هي المكتبات التي تسببت في الخطأ، والتي تم الآن إضافتها لملف requirements.txt
-from firebase_admin import initialize_app, firestore, credentials
+from firebase_admin import initialize_app, firestore, credentials, get_app
 from google.cloud.exceptions import NotFound
 
 # ----------------------------------------------------------------
@@ -35,13 +34,41 @@ except Exception as e:
 if client is None:
     st.error(get_display(reshape("❌ فشل في تهيئة عميل Gemini. تأكدي من توفير مفتاح API صالح.")))
 
-# دالة تصحيح النص العربي
+# دالة تصحيح النص العربي (تستخدم Reshaper و BiDi)
 def fix_arabic(text):
     """يعالج النصوص العربية لضمان العرض الصحيح (من اليمين لليسار)."""
     if isinstance(text, str) and text:
         reshaped_text = reshape(text)
         return get_display(reshaped_text)
     return text
+    
+# دالة مساعدة لتغليف النص (لتصحيح مشكلة Bidi في Streamlit UI)
+def rtl_markdown(content, style_type="info"):
+    """
+    يعرض المحتوى داخل وسم HTML مع فرض الاتجاه اليمين لليسار (RTL).
+    """
+    
+    # تحديد تنسيق Streamlit (باستخدام CSS مضمن)
+    styles = {
+        "info": {"bg": "#eff6ff", "border": "#93c5fd", "text": "#1d4ed8"},
+        "warning": {"bg": "#fffbeb", "border": "#fcd34d", "text": "#b45309"},
+        "success": {"bg": "#ecfdf5", "border": "#6ee7b7", "text": "#059669"},
+        "error": {"bg": "#fef2f2", "border": "#fca5a5", "text": "#dc2626"},
+    }
+    
+    style = styles.get(style_type, styles["info"])
+    
+    html_template = f"""
+    <div style="direction: rtl; text-align: right; 
+                background-color: {style['bg']}; 
+                border-left: 5px solid {style['border']}; 
+                padding: 10px; border-radius: 4px; color: {style['text']}; 
+                font-size: 16px; margin-bottom: 10px;">
+        {content}
+    </div>
+    """
+    st.markdown(html_template, unsafe_allow_html=True)
+
 
 # -----------------------------------------------------
 # 🚀 1.1 تهيئة Firebase Firestore للتخزين الدائم
@@ -50,34 +77,34 @@ def fix_arabic(text):
 # تهيئة Firebase باستخدام متغيرات البيئة في Canvas
 if 'db' not in st.session_state:
     try:
-        # قراءة متغيرات البيئة (متاحة في Canvas)
-        # هذا يضمن أن يتم الاتصال بـ Firebase التي يوفرها النظام الأساسي تلقائياً.
-        FIREBASE_CONFIG = json.loads(os.environ.get('__firebase_config', '{}'))
+        # قراءة متغيرات البيئة (المتاحة في Canvas)
+        FIREBASE_CONFIG_JSON = os.environ.get('__firebase_config', '{}')
+        FIREBASE_CONFIG = json.loads(FIREBASE_CONFIG_JSON)
         APP_ID = os.environ.get('__app_id', 'default-app-id')
         
         # التأكد من وجود البيانات الأساسية للتهيئة
-        if FIREBASE_CONFIG and APP_ID:
+        if FIREBASE_CONFIG and APP_ID and FIREBASE_CONFIG_JSON != '{}':
             
-            # محاولة تهيئة التطبيق مرة واحدة فقط
-            # get_app() تفشل إذا لم يتم التهيئة بعد، initialize_app() تهيئ.
+            app_initialized = False
             try:
-                from firebase_admin import get_app
-                get_app()
+                get_app() 
+                app_initialized = True
             except ValueError:
-                cred = credentials.Certificate(FIREBASE_CONFIG)
-                initialize_app(cred)
+                pass
+                
+            if not app_initialized:
+                 cred = credentials.Certificate(FIREBASE_CONFIG)
+                 initialize_app(cred)
                  
             st.session_state.db = firestore.client()
             
-            # تحديد مسار التخزين العام (Public path)
             st.session_state.collection_path = f"artifacts/{APP_ID}/public/data/financial_reports"
             
         else:
-            st.warning(fix_arabic("⚠️ لم يتم العثور على إعدادات Firebase. سيتم استخدام التخزين المؤقت للجلسة."))
+            rtl_markdown(fix_arabic("⚠️ لم يتم العثور على إعدادات Firebase (Config). سيتم استخدام التخزين المؤقت للجلسة."), "warning")
             st.session_state.collection_path = None
     except Exception as e:
-        # إذا فشلت التهيئة، نعود للتخزين المؤقت
-        st.error(fix_arabic(f"❌ فشل في تهيئة Firebase: {e}"))
+        rtl_markdown(fix_arabic(f"❌ فشل في تهيئة Firebase بسبب خطأ غير متوقع: {e}"), "error")
         st.session_state.collection_path = None
         
 # ----------------------------------------------------------------
@@ -89,10 +116,10 @@ def get_llm_multimodal_output(uploaded_file, client):
     يرسل ملف PDF كبيانات مضمنة مباشرة لـ Gemini لاستخلاص الـ 20 حقلاً المحددة بتنسيق JSON.
     """
     if client is None:
-        st.error(fix_arabic("🚨 لا يمكن التواصل مع Gemini. يرجى التحقق من توفير مفتاح API."))
+        rtl_markdown(fix_arabic("🚨 لا يمكن التواصل مع Gemini. يرجى التحقق من توفير مفتاح API."), "error")
         return None
 
-    st.info(fix_arabic("⏳ جاري قراءة الملف وإرساله مباشرة لـ Gemini لبدء الاستخلاص..."))
+    rtl_markdown(fix_arabic("⏳ جاري قراءة الملف وإرساله مباشرة لـ Gemini لبدء الاستخلاص..."), "info")
 
     try:
         uploaded_file.seek(0)
@@ -100,12 +127,12 @@ def get_llm_multimodal_output(uploaded_file, client):
         mime_type = uploaded_file.type 
 
         if not mime_type or not mime_type.startswith(('application/pdf', 'image/')):
-            st.error(fix_arabic(f"صيغة الملف ({mime_type}) غير مدعومة للاستخلاص البصري. الرجاء تحميل PDF أو صورة."))
+            rtl_markdown(fix_arabic(f"صيغة الملف ({mime_type}) غير مدعومة للاستخلاص البصري. الرجاء تحميل PDF أو صورة."), "error")
             return None
 
         file_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
 
-        st.success(fix_arabic(f"✅ تم تجهيز الملف بنجاح ({uploaded_file.name})"))
+        rtl_markdown(fix_arabic(f"✅ تم تجهيز الملف بنجاح ({uploaded_file.name})"), "success")
 
         system_prompt = (
             "أنت محرك تحليل واستخلاص بيانات متميز ومتخصص في معالجة نصوص OCR العربية "
@@ -185,17 +212,17 @@ def get_llm_multimodal_output(uploaded_file, client):
              extracted_data = json.loads(response_text)
              return extracted_data
         else:
-            st.error(fix_arabic(f"فشل في استخلاص بيانات JSON. تم الحصول على نص غير متوقع: {response_text[:100]}..."))
+            rtl_markdown(fix_arabic(f"فشل في استخلاص بيانات JSON. تم الحصول على نص غير متوقع: {response_text[:100]}..."), "error")
             return None
 
     except APIError as e:
-        st.error(fix_arabic(f"🚨 خطأ في الاتصال بـ Gemini API: {e}"))
+        rtl_markdown(fix_arabic(f"🚨 خطأ في الاتصال بـ Gemini API: {e}"), "error")
         return None
     except json.JSONDecodeError:
-        st.error(fix_arabic("🚨 خطأ في تحليل بيانات JSON المستخلصة. الرجاء المحاولة مرة أخرى."))
+        rtl_markdown(fix_arabic("🚨 خطأ في تحليل بيانات JSON المستخلصة. الرجاء المحاولة مرة أخرى."), "error")
         return None
     except Exception as e:
-        st.error(fix_arabic(f"🚨 خطأ غير متوقع أثناء الاستخلاص: {e}"))
+        rtl_markdown(fix_arabic(f"🚨 خطأ غير متوقع أثناء الاستخلاص: {e}"), "error")
         return None
 
 
@@ -214,30 +241,39 @@ def get_all_reports_from_firestore(db_client, collection_path):
         all_reports = []
         for report in reports_ref:
             report_data = report.to_dict()
+            report_data['doc_id'] = report.id 
             all_reports.append(report_data)
             
-        # فرز البيانات حسب الرقم التسلسلي لضمان الترتيب في الإكسل
         all_reports.sort(key=lambda x: x.get('#', float('inf')))
         
         return all_reports
 
     except Exception as e:
-        st.error(fix_arabic(f"❌ فشل في تحميل البيانات من Firestore: {e}"))
-        return None
+        if "No project has been set" in str(e) or "A default Firebase App has not been initialized" in str(e):
+             # استخدام st.warning/st.error هنا لأنها خارج دالة rtl_markdown
+             st.warning(fix_arabic("⚠️ لم يتم تهيئة Firebase بنجاح. قد يكون هناك مشكلة في إعدادات البيئة التلقائية."))
+             return []
+        else:
+            st.error(fix_arabic(f"❌ فشل في تحميل البيانات من Firestore: {e}"))
+            return None
 
 
 def add_report_to_firestore(db_client, collection_path, report_data):
     """إضافة بلاغ جديد إلى Firestore."""
     if not db_client or not collection_path:
+        rtl_markdown(fix_arabic("❌ فشل في الحفظ: لم يتم تهيئة قاعدة البيانات."), "error")
         return False
     
+    data_to_save = report_data.copy()
+    if 'doc_id' in data_to_save:
+        del data_to_save['doc_id']
+        
     try:
-        # يضيف مستند جديد بمعرف فريد (Auto-ID)
-        db_client.collection(collection_path).add(report_data)
-        st.cache_data.clear() # إجبار Streamlit على إعادة تحميل البيانات
+        db_client.collection(collection_path).add(data_to_save)
+        st.cache_data.clear()
         return True
     except Exception as e:
-        st.error(fix_arabic(f"❌ فشل في حفظ البيانات في Firestore: {e}"))
+        rtl_markdown(fix_arabic(f"❌ فشل في حفظ البيانات في Firestore: {e}"), "error")
         return False
         
         
@@ -248,7 +284,6 @@ def create_final_report(all_reports_data):
     if not all_reports_data:
         return None
         
-    # نفس ترتيب الأعمدة المطلوبة بالضبط
     column_order = [
         "#", "رقم الصادر", "تاريخ الصادر", "اسم المشتبه به", "رقم الهوية",
         "الجنسية", "تاريخ الميلاد الوافد", "تاريخ الدخول", "الحالة الاجتماعية",
@@ -258,10 +293,8 @@ def create_final_report(all_reports_data):
         "إجمالي الإيداع على الحساب اثناء الدراسة"
     ]
     
-    # تحويل القائمة الكاملة إلى DataFrame
     df = pd.DataFrame(all_reports_data)
     
-    # ضمان وجود جميع الأعمدة المطلوبة في DataFrame بالترتيب الصحيح
     final_cols = []
     for col in column_order:
         if col in df.columns:
@@ -270,30 +303,30 @@ def create_final_report(all_reports_data):
             df[col] = ''
             final_cols.append(col)
             
-    # تطبيق الترتيب النهائي
-    df = df[final_cols]
+    final_cols_filtered = [col for col in final_cols if col in df.columns and col != 'doc_id']
+    df = df[final_cols_filtered]
     
-    # تطبيق دالة fix_arabic على جميع القيم النصية قبل التصدير
+    # 🚨 هذه الخطوة حاسمة: تطبيق تصحيح BiDi على جميع بيانات DataFrame قبل التصدير إلى Excel
     for col in df.columns:
         if df[col].dtype == 'object':
+            # استخدام get_display(reshape()) هنا ضروري لملف Excel لضمان عدم عكس النص
             df[col] = df[col].apply(lambda x: get_display(reshape(str(x))) if pd.notna(x) else x)
             
-    # إنشاء مخرج Excel في الذاكرة
     output = io.BytesIO()
     
     try:
         writer = pd.ExcelWriter(output, engine='xlsxwriter')
+        # 🚨 تصحيح اسم الورقة باستخدام fix_arabic
         sheet_name = fix_arabic('بيانات البلاغات')
         df.to_excel(writer, sheet_name=sheet_name, index=False)
         
-        # تهيئة التنسيق لملف Excel
         workbook  = writer.book
         worksheet = writer.sheets[sheet_name]
         worksheet.right_to_left()
 
-        # تنسيق العمود 17 (سبب الاشتباه) ليكون ملتفاً وواسعاً
-        col_format = workbook.add_format({'text_wrap': True, 'align': 'right', 'valign': 'top'})
-        worksheet.set_column(17, 17, 60, col_format) 
+        if len(final_cols_filtered) > 17:
+            col_format = workbook.add_format({'text_wrap': True, 'align': 'right', 'valign': 'top'})
+            worksheet.set_column(17, 17, 60, col_format) 
         
         writer.close()
         output.seek(0)
@@ -301,6 +334,7 @@ def create_final_report(all_reports_data):
         return output.read()
         
     except Exception as e:
+        # استخدام st.error هنا لأنها خارج دالة rtl_markdown
         st.error(fix_arabic(f"🚨 حدث خطأ أثناء إنشاء ملف Excel: {e}"))
         return None
 
@@ -310,28 +344,29 @@ def create_final_report(all_reports_data):
 
 def main():
     st.set_page_config(page_title=fix_arabic("أتمتة استخلاص التقارير المالية"), layout="wide")
-    st.markdown(f"<h1 style='text-align: right;'>{fix_arabic('استخلاص التقارير المالية الآلي 🤖 (سجل بيانات موحد)')}</h1>", unsafe_allow_html=True)
+    # 🚨 فرض الاتجاه على العنوان الرئيسي
+    st.markdown(f"<h1 style='text-align: right; direction: rtl;'>{fix_arabic('استخلاص التقارير المالية الآلي 🤖 (سجل بيانات موحد)')}</h1>", unsafe_allow_html=True)
     st.markdown("---")
     
-    # 1. محاولة جلب جميع البيانات المخزنة من Firebase Firestore
     all_reports_data = get_all_reports_from_firestore(
         st.session_state.get('db'), 
         st.session_state.get('collection_path')
     )
     
-    # 2. تحديد عدد البلاغات الحالية واختيار وضع التخزين
     if st.session_state.get('collection_path') and all_reports_data is not None:
         reports_count = len(all_reports_data)
-        st.info(fix_arabic(f"💾 وضع التخزين: دائم (Firebase Firestore). عدد البلاغات المخزنة: {reports_count} بلاغ."))
+        # 🚨 استخدام دالة rtl_markdown للتحذيرات والمعلومات
+        rtl_markdown(fix_arabic(f"💾 وضع التخزين: دائم (Firebase Firestore). عدد البلاغات المخزنة: {reports_count} بلاغ."), "info")
     else:
-        # استخدام التخزين المؤقت في حال فشل الاتصال بقاعدة البيانات
         if 'report_data_temp' not in st.session_state:
             st.session_state.report_data_temp = []
         all_reports_data = st.session_state.report_data_temp
         reports_count = len(all_reports_data)
-        st.warning(fix_arabic(f"⚠️ وضع التخزين: مؤقت (جلسة Streamlit). عدد البلاغات المخزنة: {reports_count} بلاغ. **ملاحظة: ستفقد البيانات عند إغلاق المتصفح.**"))
+        # 🚨 استخدام دالة rtl_markdown للتحذيرات والمعلومات
+        rtl_markdown(fix_arabic(f"⚠️ وضع التخزين: مؤقت (جلسة Streamlit). عدد البلاغات المخزنة: {reports_count} بلاغ. **ملاحظة: ستفقد البيانات عند إغلاق المتصفح.**"), "warning")
 
 
+    # 🚨 استخدام fix_arabic لجميع عناصر UI
     uploaded_file = st.file_uploader(
         fix_arabic("📂 قم بتحميل ملف التقرير المالي (PDF/Excel) هنا:"),
         type=["pdf", "xlsx", "xls", "csv"],
@@ -339,13 +374,13 @@ def main():
     )
 
     if uploaded_file is not None:
-        st.success(fix_arabic(f"تم تحميل ملف: {uploaded_file.name}"))
+        rtl_markdown(fix_arabic(f"تم تحميل ملف: {uploaded_file.name}"), "success")
         
+        # 🚨 استخدام fix_arabic لزر بدء الاستخلاص
         if st.button(fix_arabic("🚀 بدء الاستخلاص والإضافة للسجل الموحد"), key="start_extraction"):
             
-            # التأكد من وجود مفتاح Gemini
             if not GEMINI_API_KEY:
-                st.error(fix_arabic("🚨 يرجى لصق مفتاح Gemini API في الكود قبل بدء الاستخلاص."))
+                rtl_markdown(fix_arabic("🚨 يرجى لصق مفتاح Gemini API في الكود قبل بدء الاستخلاص."), "error")
                 return
 
             with st.spinner(fix_arabic('⏳ جاري تحليل واستخلاص البيانات وتجهيز البلاغ... (قد يستغرق 30-60 ثانية)')):
@@ -354,29 +389,20 @@ def main():
                 
                 if extracted_data:
                     
-                    # 3. تحديد الرقم التسلسلي الجديد
-                    next_index = reports_count + 1
-                    extracted_data["#"] = next_index 
-                    
+                    # 3. تحديث البيانات الأخيرة للرقم التسلسلي
+                    current_reports_data = get_all_reports_from_firestore(st.session_state.get('db'), st.session_state.get('collection_path'))
+                    if current_reports_data is not None:
+                        extracted_data["#"] = len(current_reports_data) + 1
+                        all_reports_data = current_reports_data
+
                     # 4. حفظ البيانات (في Firestore أو مؤقتاً)
                     is_saved = False
                     
-                    # إعادة تحميل البيانات من Firestore للتأكد من أحدث نسخة (لضمان الرقم التسلسلي الصحيح)
-                    current_reports_data = get_all_reports_from_firestore(st.session_state.get('db'), st.session_state.get('collection_path'))
-                    if current_reports_data is not None:
-                        # تحديث الرقم التسلسلي بناءً على البيانات الأحدث
-                        extracted_data["#"] = len(current_reports_data) + 1
-                        all_reports_data = current_reports_data
-                        reports_count = len(current_reports_data)
-
                     if st.session_state.get('collection_path') and st.session_state.get('db'):
-                        # حفظ دائم
                         is_saved = add_report_to_firestore(st.session_state.db, st.session_state.collection_path, extracted_data)
                         if is_saved:
-                            # إعادة تحميل البيانات من Firestore بعد الإضافة لضمان التحديث الفوري
                             all_reports_data = get_all_reports_from_firestore(st.session_state.db, st.session_state.collection_path)
                     else:
-                        # حفظ مؤقت
                         st.session_state.report_data_temp.append(extracted_data)
                         is_saved = True
                         all_reports_data = st.session_state.report_data_temp
@@ -385,10 +411,11 @@ def main():
                     if is_saved and all_reports_data:
                         
                         # 5. عرض البيانات المستخلصة للبلاغ الأخير
-                        st.markdown(f"<h3 style='text-align: right;'>{fix_arabic(f'✅ البيانات المستخلصة للبلاغ رقم {extracted_data['#']} (تحقق سريع)')}</h3>", unsafe_allow_html=True)
+                        # 🚨 فرض الاتجاه على العنوان
+                        st.markdown(f"<h3 style='text-align: right; direction: rtl; color: #059669;'>{fix_arabic(f'✅ البيانات المستخلصة للبلاغ رقم {extracted_data['#']} (تحقق سريع)')}</h3>", unsafe_allow_html=True)
                         st.markdown("---")
                         
-                        last_report = extracted_data # نستخدم البيانات المستخلصة الجديدة مباشرة للعرض
+                        last_report = extracted_data
                         
                         for key, value in last_report.items():
                             display_key = fix_arabic(key)
@@ -409,9 +436,11 @@ def main():
                         excel_data_bytes = create_final_report(all_reports_data)
                         
                         if excel_data_bytes:
-                            st.subheader(fix_arabic("🎉 تم حفظ البلاغ! قم بتحميل السجل الموحد"))
+                            # 🚨 فرض الاتجاه على العنوان
+                            st.markdown(f"<h3 style='text-align: right; direction: rtl;'>{fix_arabic('🎉 تم حفظ البلاغ! قم بتحميل السجل الموحد')}</h3>", unsafe_allow_html=True)
                             st.balloons()
                             
+                            # 🚨 استخدام fix_arabic لزر التحميل
                             st.download_button(
                                 label=fix_arabic("⬇️ تحميل سجل بيانات البلاغ الموحد (بيانات البلاغ.xlsx)"),
                                 data=excel_data_bytes,
@@ -419,9 +448,9 @@ def main():
                                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                             )
                         else:
-                            st.error(fix_arabic("❌ فشل في إنشاء ملف Excel. الرجاء مراجعة سجل الأخطاء."))
+                            rtl_markdown(fix_arabic("❌ فشل في إنشاء ملف Excel. الرجاء مراجعة سجل الأخطاء."), "error")
                     else:
-                        st.error(fix_arabic("❌ فشلت عملية حفظ البيانات. الرجاء المحاولة مرة أخرى."))
+                        rtl_markdown(fix_arabic("❌ فشلت عملية حفظ البيانات. الرجاء المحاولة مرة أخرى."), "error")
 
 
 if __name__ == '__main__':
