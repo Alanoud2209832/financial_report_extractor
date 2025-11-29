@@ -79,6 +79,7 @@ def rtl_markdown(content, style_type="info"):
 
 # تهيئة Firebase باستخدام متغيرات البيئة في Canvas
 if 'db' not in st.session_state:
+    st.session_state.firebase_ready = False
     try:
         # قراءة متغيرات البيئة (المتاحة في Canvas)
         FIREBASE_CONFIG_JSON = os.environ.get('__firebase_config', '{}')
@@ -100,11 +101,11 @@ if 'db' not in st.session_state:
                  initialize_app(cred)
                  
             st.session_state.db = firestore.client()
-            
             st.session_state.collection_path = f"artifacts/{APP_ID}/public/data/financial_reports"
+            st.session_state.firebase_ready = True
             
         else:
-            rtl_markdown("⚠️ لم يتم العثور على إعدادات Firebase (Config). سيتم استخدام التخزين المؤقت للجلسة.", "warning")
+            rtl_markdown("❌ فشل في إعداد Firebase (Config). **يجب توفير إعدادات Firebase للتخزين الدائم.**", "error")
             st.session_state.collection_path = None
     except Exception as e:
         rtl_markdown(f"❌ فشل في تهيئة Firebase بسبب خطأ غير متوقع: {e}", "error")
@@ -241,8 +242,9 @@ def get_llm_multimodal_output(uploaded_file, client):
 @st.cache_data(show_spinner=False)
 def get_all_reports_from_firestore(db_client, collection_path):
     """تحميل جميع المستندات من Firestore."""
-    if not db_client or not collection_path:
-        return [] # Return empty list if no client/path
+    # شرط أساسي: يجب أن تكون Firebase جاهزة
+    if not st.session_state.get('firebase_ready') or not db_client or not collection_path:
+        return None # العودة بـ None لتعطيل التطبيق عند الفشل في الاتصال الدائم
     
     try:
         reports_ref = db_client.collection(collection_path).stream()
@@ -257,18 +259,14 @@ def get_all_reports_from_firestore(db_client, collection_path):
         return all_reports
 
     except Exception as e:
-        if "No project has been set" in str(e) or "A default Firebase App has not been initialized" in str(e):
-             st.warning(fix_arabic("⚠️ لم يتم تهيئة Firebase بنجاح. قد يكون هناك مشكلة في إعدادات البيئة التلقائية."))
-             return []
-        else:
-            st.error(fix_arabic(f"❌ فشل في تحميل البيانات من Firestore: {e}"))
-            return []
+        st.error(fix_arabic(f"❌ فشل في تحميل البيانات من Firestore. لا يمكن عرض السجل الموحد: {e}"))
+        return None
 
 
 def add_report_to_firestore(db_client, collection_path, report_data):
     """إضافة بلاغ جديد إلى Firestore."""
-    if not db_client or not collection_path:
-        rtl_markdown("❌ فشل في الحفظ: لم يتم تهيئة قاعدة البيانات.", "error")
+    if not st.session_state.get('firebase_ready') or not db_client or not collection_path:
+        rtl_markdown("❌ فشل في الحفظ: قاعدة البيانات الدائمة غير متاحة أو غير مهيأة بشكل صحيح.", "error")
         return False
     
     data_to_save = report_data.copy()
@@ -277,6 +275,7 @@ def add_report_to_firestore(db_client, collection_path, report_data):
         
     try:
         db_client.collection(collection_path).add(data_to_save)
+        # مسح ذاكرة التخزين المؤقت للبيانات لضمان إعادة التحميل من DB
         st.cache_data.clear()
         return True
     except Exception as e:
@@ -351,25 +350,76 @@ def main():
     st.markdown(f"<h1 style='text-align: right; direction: rtl;'>{fix_arabic('استخلاص التقارير المالية الآلي 🤖 (سجل بيانات موحد)')}</h1>", unsafe_allow_html=True)
     st.markdown("---")
     
-    # تحميل جميع البيانات الحالية (من Firestore أو الجلسة)
+    # 1. التحقق من جاهزية Firebase
+    if not st.session_state.get('firebase_ready'):
+        rtl_markdown("🚨 التخزين الدائم غير متاح. يرجى مراجعة إعدادات Firebase لضمان حفظ البيانات بشكل دائم وتجنب فقدانها عند تحديث الصفحة.", "error")
+        return
+        
+    # 2. تحميل جميع البيانات الحالية (من Firestore فقط)
     all_reports_data = get_all_reports_from_firestore(
         st.session_state.get('db'), 
         st.session_state.get('collection_path')
     )
     
-    # التعامل مع التخزين المؤقت/الدائم
-    if st.session_state.get('collection_path') and all_reports_data is not None:
-        reports_count = len(all_reports_data)
-        rtl_markdown(f"💾 وضع التخزين: دائم (Firebase Firestore). عدد البلاغات المخزنة: {reports_count} بلاغ.", "info")
+    if all_reports_data is None:
+        # إذا لم يتمكن من تحميل البيانات من Firebase بالرغم من جاهزيتها
+        rtl_markdown("❌ فشل في قراءة السجل الموحد من Firebase Firestore. تأكد من قواعد الأمان ومن اتصالك بالإنترنت.", "error")
+        return
+
+    # 3. عرض حالة التخزين (وهي الآن دائمة)
+    reports_count = len(all_reports_data)
+    rtl_markdown(f"💾 وضع التخزين: **دائم (Firebase Firestore)**. عدد البلاغات المخزنة: {reports_count} بلاغ.", "info")
+
+    st.markdown("---") 
+
+    # ------------------------------------------------------------------
+    # 4. عرض السجل الموحد الثابت (الخانة المطلوبة)
+    # ------------------------------------------------------------------
+    st.markdown(f"<h3 style='text-align: right; direction: rtl; color: #1e40af;'>{fix_arabic('📊 السجل الموحد الحالي (بيانات ثابتة)')}</h3>", unsafe_allow_html=True)
+    
+    if all_reports_data:
+        # تحويل البيانات إلى DataFrame لعرضها
+        df_display = pd.DataFrame(all_reports_data)
+        
+        column_order_display = [
+            "#", "رقم الصادر", "تاريخ الصادر", "اسم المشتبه به", "رقم الهوية",
+            "الجنسية", "تاريخ الميلاد الوافد", "تاريخ الدخول", "الحالة الاجتماعية",
+            "المهنة", "رقم الجوال", "المدينة", "رصيد الحساب", "الدخل السنوي",
+            "رقم الوارد", "تاريخ الوارد", "رقم صاحب العمل/ السجل التجاري",
+            "سبب الاشتباه", "تاريخ الدارسة من", "تاريخ الدراسة الى",
+            "إجمالي الإيداع على الحساب اثناء الدراسة"
+        ]
+        
+        # تصفية وترتيب الأعمدة المتوفرة
+        cols_to_display = [col for col in column_order_display if col in df_display.columns and col != 'doc_id']
+        
+        df_display = df_display[cols_to_display]
+        
+        # تطبيق تصحيح اللغة العربية على محتوى الخلايا (للعرض في Streamlit)
+        for col in df_display.columns:
+            if df_display[col].dtype == 'object':
+                df_display[col] = df_display[col].apply(lambda x: fix_arabic(str(x)) if pd.notna(x) else x)
+                
+        # عرض الجدول
+        st.dataframe(df_display, use_container_width=True, height=300)
+        
+        # زر التحميل يظهر مباشرة أسفل الجدول الثابت
+        excel_data_bytes = create_final_report(all_reports_data)
+        if excel_data_bytes:
+             st.download_button(
+                label=fix_arabic("⬇️ تحميل سجل بيانات البلاغ الموحد الحالي (بيانات البلاغ.xlsx)"),
+                data=excel_data_bytes,
+                file_name=fix_arabic("بيانات البلاغ.xlsx"),
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+             )
+
     else:
-        # إذا لم يتم تهيئة Firestore أو فشل، نستخدم التخزين المؤقت
-        if 'report_data_temp' not in st.session_state:
-            st.session_state.report_data_temp = []
-        all_reports_data = st.session_state.report_data_temp
-        reports_count = len(all_reports_data)
-        rtl_markdown(f"⚠️ وضع التخزين: مؤقت (جلسة Streamlit). عدد البلاغات المخزنة: {reports_count} بلاغ. **ملاحظة: ستفقد البيانات عند إغلاق المتصفح.**", "warning")
+        rtl_markdown("السجل الموحد فارغ حاليًا. قم بتحميل تقرير مالي لبدء عملية الاستخلاص.", "info")
+    
+    st.markdown("---") # فاصل قبل محمل الملف
 
 
+    # 5. محمل الملف ومنطق الاستخلاص
     uploaded_file = st.file_uploader(
         fix_arabic("📂 قم بتحميل ملف التقرير المالي (PDF/Excel) هنا:"),
         type=["pdf", "xlsx", "xls", "csv"],
@@ -391,32 +441,22 @@ def main():
                 
                 if extracted_data:
                     
-                    # 🚨 FIX: حساب وإضافة الرقم التسلسلي (#) فوراً بعد الاستخلاص الناجح 
-                    # نعتمد على طول قائمة all_reports_data التي تم تحميلها في بداية الدالة
+                    # حساب وإضافة الرقم التسلسلي (#) بناءً على عدد التقارير الحالي من DB
                     reports_count_for_new_doc = len(all_reports_data) + 1
                     extracted_data["#"] = reports_count_for_new_doc
                     
-                    # 2. عرض البيانات المستخلصة للبلاغ الأخير (الآن المفتاح '#' متوفر)
+                    # 6. عرض البيانات المستخلصة للبلاغ الأخير
                     st.markdown(f"<h3 style='text-align: right; direction: rtl; color: #059669;'>{fix_arabic(f'✅ البيانات المستخلصة للبلاغ رقم {extracted_data['#']} (تحقق سريع)')}</h3>", unsafe_allow_html=True)
                     st.markdown("---")
 
-                    # 3. حفظ البيانات (في Firestore أو مؤقتاً)
-                    is_saved = False
-                    
-                    if st.session_state.get('collection_path') and st.session_state.get('db'):
-                        # الحفظ في Firestore
-                        is_saved = add_report_to_firestore(st.session_state.db, st.session_state.collection_path, extracted_data)
-                        if is_saved:
-                            # إعادة تحميل القائمة بعد الحفظ الناجح
-                            all_reports_data = get_all_reports_from_firestore(st.session_state.db, st.session_state.collection_path)
-                    else:
-                        # الحفظ في الجلسة المؤقتة
-                        st.session_state.report_data_temp.append(extracted_data)
-                        is_saved = True
-                        all_reports_data = st.session_state.report_data_temp
+                    # 7. حفظ البيانات (في Firestore فقط)
+                    is_saved = add_report_to_firestore(
+                        st.session_state.db, 
+                        st.session_state.collection_path, 
+                        extracted_data
+                    )
 
-
-                    if is_saved and all_reports_data:
+                    if is_saved:
                         
                         last_report = extracted_data
                         
@@ -433,24 +473,11 @@ def main():
                             st.markdown(html_line, unsafe_allow_html=True)
 
                         st.markdown("---")
-                        
-                        # 4. إنشاء ملف الإكسل الموحد
-                        excel_data_bytes = create_final_report(all_reports_data)
-                        
-                        if excel_data_bytes:
-                            st.markdown(f"<h3 style='text-align: right; direction: rtl;'>{fix_arabic('🎉 تم حفظ البلاغ! قم بتحميل السجل الموحد')}</h3>", unsafe_allow_html=True)
-                            st.balloons()
-                            
-                            st.download_button(
-                                label=fix_arabic("⬇️ تحميل سجل بيانات البلاغ الموحد (بيانات البلاغ.xlsx)"),
-                                data=excel_data_bytes,
-                                file_name=fix_arabic("بيانات البلاغ.xlsx"),
-                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                            )
-                        else:
-                            rtl_markdown("❌ فشل في إنشاء ملف Excel. الرجاء مراجعة سجل الأخطاء.", "error")
+                        # إعادة تشغيل التطبيق لعرض الجدول المحدث بالبيانات الجديدة المحملة من Firebase
+                        st.rerun()
                     else:
-                        rtl_markdown("❌ فشلت عملية حفظ البيانات. الرجاء المحاولة مرة أخرى.", "error")
+                        # رسالة فشل الحفظ تظهر داخل دالة add_report_to_firestore
+                        pass
 
 
 if __name__ == '__main__':
