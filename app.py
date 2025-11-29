@@ -17,7 +17,7 @@ from google.cloud.exceptions import NotFound
 # ----------------------------------------------------------------
 
 # 🚨 هام: قم بتعيين مفتاح API الخاص بكِ هنا!
-GEMINI_API_KEY = "AIzaSyA3jr9tbNVYIbpV1yOQtg5dxS3lIuGtMag" # يرجى لصق المفتاح الجديد الصالح هنا!
+GEMINI_API_KEY = "AIzaSyAwi0kwDln4fKeyWBy4DupPUXTuPYuLeWY" # يرجى لصق المفتاح الجديد الصالح هنا!
 
 # تهيئة Gemini Client
 client = None
@@ -28,10 +28,12 @@ try:
     else:
          client = genai.Client()
 except Exception as e:
+    # استخدام st.error هنا لأنها قبل تهيئة الواجهة الكاملة
     error_message = f"فشل في تهيئة عميل Gemini: {e}"
     st.error(get_display(reshape(error_message)))
 
 if client is None:
+    # استخدام st.error هنا لأنها قبل تهيئة الواجهة الكاملة
     st.error(get_display(reshape("❌ فشل في تهيئة عميل Gemini. تأكدي من توفير مفتاح API صالح.")))
 
 # دالة تصحيح النص العربي (تستخدم Reshaper و BiDi)
@@ -45,7 +47,7 @@ def fix_arabic(text):
 # دالة مساعدة لتغليف النص (لتصحيح مشكلة Bidi في Streamlit UI)
 def rtl_markdown(content, style_type="info"):
     """
-    يعرض المحتوى داخل وسم HTML مع فرض الاتجاه اليمين لليسار (RTL).
+    يعرض المحتوى داخل وسم HTML مع فرض الاتجاه اليمين لليسار (RTL) وتطبيق تنسيق Streamlit.
     """
     
     # تحديد تنسيق Streamlit (باستخدام CSS مضمن)
@@ -58,13 +60,14 @@ def rtl_markdown(content, style_type="info"):
     
     style = styles.get(style_type, styles["info"])
     
+    # فرض الاتجاه والمحاذاة
     html_template = f"""
     <div style="direction: rtl; text-align: right; 
                 background-color: {style['bg']}; 
                 border-left: 5px solid {style['border']}; 
                 padding: 10px; border-radius: 4px; color: {style['text']}; 
                 font-size: 16px; margin-bottom: 10px;">
-        {content}
+        {fix_arabic(content)}
     </div>
     """
     st.markdown(html_template, unsafe_allow_html=True)
@@ -101,10 +104,10 @@ if 'db' not in st.session_state:
             st.session_state.collection_path = f"artifacts/{APP_ID}/public/data/financial_reports"
             
         else:
-            rtl_markdown(fix_arabic("⚠️ لم يتم العثور على إعدادات Firebase (Config). سيتم استخدام التخزين المؤقت للجلسة."), "warning")
+            rtl_markdown("⚠️ لم يتم العثور على إعدادات Firebase (Config). سيتم استخدام التخزين المؤقت للجلسة.", "warning")
             st.session_state.collection_path = None
     except Exception as e:
-        rtl_markdown(fix_arabic(f"❌ فشل في تهيئة Firebase بسبب خطأ غير متوقع: {e}"), "error")
+        rtl_markdown(f"❌ فشل في تهيئة Firebase بسبب خطأ غير متوقع: {e}", "error")
         st.session_state.collection_path = None
         
 # ----------------------------------------------------------------
@@ -116,10 +119,10 @@ def get_llm_multimodal_output(uploaded_file, client):
     يرسل ملف PDF كبيانات مضمنة مباشرة لـ Gemini لاستخلاص الـ 20 حقلاً المحددة بتنسيق JSON.
     """
     if client is None:
-        rtl_markdown(fix_arabic("🚨 لا يمكن التواصل مع Gemini. يرجى التحقق من توفير مفتاح API."), "error")
+        rtl_markdown("🚨 لا يمكن التواصل مع Gemini. يرجى التحقق من توفير مفتاح API.", "error")
         return None
 
-    rtl_markdown(fix_arabic("⏳ جاري قراءة الملف وإرساله مباشرة لـ Gemini لبدء الاستخلاص..."), "info")
+    rtl_markdown("⏳ جاري قراءة الملف وإرساله مباشرة لـ Gemini لبدء الاستخلاص...", "info")
 
     try:
         uploaded_file.seek(0)
@@ -127,12 +130,12 @@ def get_llm_multimodal_output(uploaded_file, client):
         mime_type = uploaded_file.type 
 
         if not mime_type or not mime_type.startswith(('application/pdf', 'image/')):
-            rtl_markdown(fix_arabic(f"صيغة الملف ({mime_type}) غير مدعومة للاستخلاص البصري. الرجاء تحميل PDF أو صورة."), "error")
+            rtl_markdown(f"صيغة الملف ({mime_type}) غير مدعومة للاستخلاص البصري. الرجاء تحميل PDF أو صورة.", "error")
             return None
 
         file_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
 
-        rtl_markdown(fix_arabic(f"✅ تم تجهيز الملف بنجاح ({uploaded_file.name})"), "success")
+        rtl_markdown(f"✅ تم تجهيز الملف بنجاح ({uploaded_file.name})", "success")
 
         system_prompt = (
             "أنت محرك تحليل واستخلاص بيانات متميز ومتخصص في معالجة نصوص OCR العربية "
@@ -212,17 +215,22 @@ def get_llm_multimodal_output(uploaded_file, client):
              extracted_data = json.loads(response_text)
              return extracted_data
         else:
-            rtl_markdown(fix_arabic(f"فشل في استخلاص بيانات JSON. تم الحصول على نص غير متوقع: {response_text[:100]}..."), "error")
+            rtl_markdown(f"فشل في استخلاص بيانات JSON. تم الحصول على نص غير متوقع: {response_text[:100]}...", "error")
             return None
 
     except APIError as e:
-        rtl_markdown(fix_arabic(f"🚨 خطأ في الاتصال بـ Gemini API: {e}"), "error")
+        # معالجة خاصة لخطأ 403 (المرتبط بتسريب المفتاح)
+        error_details = str(e)
+        if "403 PERMISSION_DENIED" in error_details or "leaked" in error_details:
+             rtl_markdown("🚨 خطأ 403 (PERMISSION_DENIED): مفتاح Gemini API الذي تستخدمه معطل أو تم الإبلاغ عن تسريبه. **الرجاء استبداله بمفتاح API جديد وصالح في السطر رقم 14**.", "error")
+        else:
+             rtl_markdown(f"🚨 خطأ في الاتصال بـ Gemini API: {e}", "error")
         return None
     except json.JSONDecodeError:
-        rtl_markdown(fix_arabic("🚨 خطأ في تحليل بيانات JSON المستخلصة. الرجاء المحاولة مرة أخرى."), "error")
+        rtl_markdown("🚨 خطأ في تحليل بيانات JSON المستخلصة. الرجاء المحاولة مرة أخرى.", "error")
         return None
     except Exception as e:
-        rtl_markdown(fix_arabic(f"🚨 خطأ غير متوقع أثناء الاستخلاص: {e}"), "error")
+        rtl_markdown(f"🚨 خطأ غير متوقع أثناء الاستخلاص: {e}", "error")
         return None
 
 
@@ -250,7 +258,6 @@ def get_all_reports_from_firestore(db_client, collection_path):
 
     except Exception as e:
         if "No project has been set" in str(e) or "A default Firebase App has not been initialized" in str(e):
-             # استخدام st.warning/st.error هنا لأنها خارج دالة rtl_markdown
              st.warning(fix_arabic("⚠️ لم يتم تهيئة Firebase بنجاح. قد يكون هناك مشكلة في إعدادات البيئة التلقائية."))
              return []
         else:
@@ -261,7 +268,7 @@ def get_all_reports_from_firestore(db_client, collection_path):
 def add_report_to_firestore(db_client, collection_path, report_data):
     """إضافة بلاغ جديد إلى Firestore."""
     if not db_client or not collection_path:
-        rtl_markdown(fix_arabic("❌ فشل في الحفظ: لم يتم تهيئة قاعدة البيانات."), "error")
+        rtl_markdown("❌ فشل في الحفظ: لم يتم تهيئة قاعدة البيانات.", "error")
         return False
     
     data_to_save = report_data.copy()
@@ -273,7 +280,7 @@ def add_report_to_firestore(db_client, collection_path, report_data):
         st.cache_data.clear()
         return True
     except Exception as e:
-        rtl_markdown(fix_arabic(f"❌ فشل في حفظ البيانات في Firestore: {e}"), "error")
+        rtl_markdown(f"❌ فشل في حفظ البيانات في Firestore: {e}", "error")
         return False
         
         
@@ -306,17 +313,15 @@ def create_final_report(all_reports_data):
     final_cols_filtered = [col for col in final_cols if col in df.columns and col != 'doc_id']
     df = df[final_cols_filtered]
     
-    # 🚨 هذه الخطوة حاسمة: تطبيق تصحيح BiDi على جميع بيانات DataFrame قبل التصدير إلى Excel
+    # تطبيق تصحيح BiDi على جميع بيانات DataFrame قبل التصدير إلى Excel
     for col in df.columns:
         if df[col].dtype == 'object':
-            # استخدام get_display(reshape()) هنا ضروري لملف Excel لضمان عدم عكس النص
             df[col] = df[col].apply(lambda x: get_display(reshape(str(x))) if pd.notna(x) else x)
             
     output = io.BytesIO()
     
     try:
         writer = pd.ExcelWriter(output, engine='xlsxwriter')
-        # 🚨 تصحيح اسم الورقة باستخدام fix_arabic
         sheet_name = fix_arabic('بيانات البلاغات')
         df.to_excel(writer, sheet_name=sheet_name, index=False)
         
@@ -334,7 +339,6 @@ def create_final_report(all_reports_data):
         return output.read()
         
     except Exception as e:
-        # استخدام st.error هنا لأنها خارج دالة rtl_markdown
         st.error(fix_arabic(f"🚨 حدث خطأ أثناء إنشاء ملف Excel: {e}"))
         return None
 
@@ -344,7 +348,6 @@ def create_final_report(all_reports_data):
 
 def main():
     st.set_page_config(page_title=fix_arabic("أتمتة استخلاص التقارير المالية"), layout="wide")
-    # 🚨 فرض الاتجاه على العنوان الرئيسي
     st.markdown(f"<h1 style='text-align: right; direction: rtl;'>{fix_arabic('استخلاص التقارير المالية الآلي 🤖 (سجل بيانات موحد)')}</h1>", unsafe_allow_html=True)
     st.markdown("---")
     
@@ -355,18 +358,15 @@ def main():
     
     if st.session_state.get('collection_path') and all_reports_data is not None:
         reports_count = len(all_reports_data)
-        # 🚨 استخدام دالة rtl_markdown للتحذيرات والمعلومات
-        rtl_markdown(fix_arabic(f"💾 وضع التخزين: دائم (Firebase Firestore). عدد البلاغات المخزنة: {reports_count} بلاغ."), "info")
+        rtl_markdown(f"💾 وضع التخزين: دائم (Firebase Firestore). عدد البلاغات المخزنة: {reports_count} بلاغ.", "info")
     else:
         if 'report_data_temp' not in st.session_state:
             st.session_state.report_data_temp = []
         all_reports_data = st.session_state.report_data_temp
         reports_count = len(all_reports_data)
-        # 🚨 استخدام دالة rtl_markdown للتحذيرات والمعلومات
-        rtl_markdown(fix_arabic(f"⚠️ وضع التخزين: مؤقت (جلسة Streamlit). عدد البلاغات المخزنة: {reports_count} بلاغ. **ملاحظة: ستفقد البيانات عند إغلاق المتصفح.**"), "warning")
+        rtl_markdown(f"⚠️ وضع التخزين: مؤقت (جلسة Streamlit). عدد البلاغات المخزنة: {reports_count} بلاغ. **ملاحظة: ستفقد البيانات عند إغلاق المتصفح.**", "warning")
 
 
-    # 🚨 استخدام fix_arabic لجميع عناصر UI
     uploaded_file = st.file_uploader(
         fix_arabic("📂 قم بتحميل ملف التقرير المالي (PDF/Excel) هنا:"),
         type=["pdf", "xlsx", "xls", "csv"],
@@ -374,13 +374,12 @@ def main():
     )
 
     if uploaded_file is not None:
-        rtl_markdown(fix_arabic(f"تم تحميل ملف: {uploaded_file.name}"), "success")
+        rtl_markdown(f"تم تحميل ملف: {uploaded_file.name}", "success")
         
-        # 🚨 استخدام fix_arabic لزر بدء الاستخلاص
         if st.button(fix_arabic("🚀 بدء الاستخلاص والإضافة للسجل الموحد"), key="start_extraction"):
             
             if not GEMINI_API_KEY:
-                rtl_markdown(fix_arabic("🚨 يرجى لصق مفتاح Gemini API في الكود قبل بدء الاستخلاص."), "error")
+                rtl_markdown("🚨 يرجى لصق مفتاح Gemini API في الكود قبل بدء الاستخلاص.", "error")
                 return
 
             with st.spinner(fix_arabic('⏳ جاري تحليل واستخلاص البيانات وتجهيز البلاغ... (قد يستغرق 30-60 ثانية)')):
@@ -389,13 +388,11 @@ def main():
                 
                 if extracted_data:
                     
-                    # 3. تحديث البيانات الأخيرة للرقم التسلسلي
                     current_reports_data = get_all_reports_from_firestore(st.session_state.get('db'), st.session_state.get('collection_path'))
                     if current_reports_data is not None:
                         extracted_data["#"] = len(current_reports_data) + 1
                         all_reports_data = current_reports_data
 
-                    # 4. حفظ البيانات (في Firestore أو مؤقتاً)
                     is_saved = False
                     
                     if st.session_state.get('collection_path') and st.session_state.get('db'):
@@ -410,8 +407,6 @@ def main():
 
                     if is_saved and all_reports_data:
                         
-                        # 5. عرض البيانات المستخلصة للبلاغ الأخير
-                        # 🚨 فرض الاتجاه على العنوان
                         st.markdown(f"<h3 style='text-align: right; direction: rtl; color: #059669;'>{fix_arabic(f'✅ البيانات المستخلصة للبلاغ رقم {extracted_data['#']} (تحقق سريع)')}</h3>", unsafe_allow_html=True)
                         st.markdown("---")
                         
@@ -421,7 +416,6 @@ def main():
                             display_key = fix_arabic(key)
                             display_value = fix_arabic(value)
                             
-                            # الحل النهائي لـ Bidi: عرض المفتاح والقيمة مفصولين بوضوح داخل وسم RTL
                             html_line = f"""
                             <div style="direction: rtl; text-align: right; margin-bottom: 5px; line-height: 1.5; font-size: 16px;">
                                 <span style="font-weight: bold; color: #155e75;">{display_key}:</span>
@@ -432,15 +426,12 @@ def main():
 
                         st.markdown("---")
                         
-                        # 6. إنشاء ملف الإكسل الموحد من جميع البيانات المخزنة
                         excel_data_bytes = create_final_report(all_reports_data)
                         
                         if excel_data_bytes:
-                            # 🚨 فرض الاتجاه على العنوان
                             st.markdown(f"<h3 style='text-align: right; direction: rtl;'>{fix_arabic('🎉 تم حفظ البلاغ! قم بتحميل السجل الموحد')}</h3>", unsafe_allow_html=True)
                             st.balloons()
                             
-                            # 🚨 استخدام fix_arabic لزر التحميل
                             st.download_button(
                                 label=fix_arabic("⬇️ تحميل سجل بيانات البلاغ الموحد (بيانات البلاغ.xlsx)"),
                                 data=excel_data_bytes,
@@ -448,9 +439,9 @@ def main():
                                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                             )
                         else:
-                            rtl_markdown(fix_arabic("❌ فشل في إنشاء ملف Excel. الرجاء مراجعة سجل الأخطاء."), "error")
+                            rtl_markdown("❌ فشل في إنشاء ملف Excel. الرجاء مراجعة سجل الأخطاء.", "error")
                     else:
-                        rtl_markdown(fix_arabic("❌ فشلت عملية حفظ البيانات. الرجاء المحاولة مرة أخرى."), "error")
+                        rtl_markdown("❌ فشلت عملية حفظ البيانات. الرجاء المحاولة مرة أخرى.", "error")
 
 
 if __name__ == '__main__':
