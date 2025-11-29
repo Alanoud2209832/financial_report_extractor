@@ -3,4 +3,5 @@ pandas
 google-genai
 arabic-reshaper
 python-bidi
+firebase-admin
 xlsxwriter
