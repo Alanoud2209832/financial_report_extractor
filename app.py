@@ -242,7 +242,7 @@ def get_llm_multimodal_output(uploaded_file, client):
 def get_all_reports_from_firestore(db_client, collection_path):
     """تحميل جميع المستندات من Firestore."""
     if not db_client or not collection_path:
-        return None
+        return [] # Return empty list if no client/path
     
     try:
         reports_ref = db_client.collection(collection_path).stream()
@@ -262,7 +262,7 @@ def get_all_reports_from_firestore(db_client, collection_path):
              return []
         else:
             st.error(fix_arabic(f"❌ فشل في تحميل البيانات من Firestore: {e}"))
-            return None
+            return []
 
 
 def add_report_to_firestore(db_client, collection_path, report_data):
@@ -351,15 +351,18 @@ def main():
     st.markdown(f"<h1 style='text-align: right; direction: rtl;'>{fix_arabic('استخلاص التقارير المالية الآلي 🤖 (سجل بيانات موحد)')}</h1>", unsafe_allow_html=True)
     st.markdown("---")
     
+    # تحميل جميع البيانات الحالية (من Firestore أو الجلسة)
     all_reports_data = get_all_reports_from_firestore(
         st.session_state.get('db'), 
         st.session_state.get('collection_path')
     )
     
+    # التعامل مع التخزين المؤقت/الدائم
     if st.session_state.get('collection_path') and all_reports_data is not None:
         reports_count = len(all_reports_data)
         rtl_markdown(f"💾 وضع التخزين: دائم (Firebase Firestore). عدد البلاغات المخزنة: {reports_count} بلاغ.", "info")
     else:
+        # إذا لم يتم تهيئة Firestore أو فشل، نستخدم التخزين المؤقت
         if 'report_data_temp' not in st.session_state:
             st.session_state.report_data_temp = []
         all_reports_data = st.session_state.report_data_temp
@@ -388,27 +391,32 @@ def main():
                 
                 if extracted_data:
                     
-                    current_reports_data = get_all_reports_from_firestore(st.session_state.get('db'), st.session_state.get('collection_path'))
-                    if current_reports_data is not None:
-                        extracted_data["#"] = len(current_reports_data) + 1
-                        all_reports_data = current_reports_data
+                    # 🚨 FIX: حساب وإضافة الرقم التسلسلي (#) فوراً بعد الاستخلاص الناجح 
+                    # نعتمد على طول قائمة all_reports_data التي تم تحميلها في بداية الدالة
+                    reports_count_for_new_doc = len(all_reports_data) + 1
+                    extracted_data["#"] = reports_count_for_new_doc
+                    
+                    # 2. عرض البيانات المستخلصة للبلاغ الأخير (الآن المفتاح '#' متوفر)
+                    st.markdown(f"<h3 style='text-align: right; direction: rtl; color: #059669;'>{fix_arabic(f'✅ البيانات المستخلصة للبلاغ رقم {extracted_data['#']} (تحقق سريع)')}</h3>", unsafe_allow_html=True)
+                    st.markdown("---")
 
+                    # 3. حفظ البيانات (في Firestore أو مؤقتاً)
                     is_saved = False
                     
                     if st.session_state.get('collection_path') and st.session_state.get('db'):
+                        # الحفظ في Firestore
                         is_saved = add_report_to_firestore(st.session_state.db, st.session_state.collection_path, extracted_data)
                         if is_saved:
+                            # إعادة تحميل القائمة بعد الحفظ الناجح
                             all_reports_data = get_all_reports_from_firestore(st.session_state.db, st.session_state.collection_path)
                     else:
+                        # الحفظ في الجلسة المؤقتة
                         st.session_state.report_data_temp.append(extracted_data)
                         is_saved = True
                         all_reports_data = st.session_state.report_data_temp
 
 
                     if is_saved and all_reports_data:
-                        
-                        st.markdown(f"<h3 style='text-align: right; direction: rtl; color: #059669;'>{fix_arabic(f'✅ البيانات المستخلصة للبلاغ رقم {extracted_data['#']} (تحقق سريع)')}</h3>", unsafe_allow_html=True)
-                        st.markdown("---")
                         
                         last_report = extracted_data
                         
@@ -426,6 +434,7 @@ def main():
 
                         st.markdown("---")
                         
+                        # 4. إنشاء ملف الإكسل الموحد
                         excel_data_bytes = create_final_report(all_reports_data)
                         
                         if excel_data_bytes:
@@ -445,4 +454,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    main()F
