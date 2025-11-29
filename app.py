@@ -9,6 +9,7 @@ import os
 import json
 import io
 import time 
+# 🚨 هذه هي المكتبات التي تسببت في الخطأ، والتي تم الآن إضافتها لملف requirements.txt
 from firebase_admin import initialize_app, firestore, credentials
 from google.cloud.exceptions import NotFound
 
@@ -50,6 +51,7 @@ def fix_arabic(text):
 if 'db' not in st.session_state:
     try:
         # قراءة متغيرات البيئة (متاحة في Canvas)
+        # هذا يضمن أن يتم الاتصال بـ Firebase التي يوفرها النظام الأساسي تلقائياً.
         FIREBASE_CONFIG = json.loads(os.environ.get('__firebase_config', '{}'))
         APP_ID = os.environ.get('__app_id', 'default-app-id')
         
@@ -57,20 +59,24 @@ if 'db' not in st.session_state:
         if FIREBASE_CONFIG and APP_ID:
             
             # محاولة تهيئة التطبيق مرة واحدة فقط
-            if not initialize_app(): 
-                 cred = credentials.Certificate(FIREBASE_CONFIG)
-                 initialize_app(cred)
+            # get_app() تفشل إذا لم يتم التهيئة بعد، initialize_app() تهيئ.
+            try:
+                from firebase_admin import get_app
+                get_app()
+            except ValueError:
+                cred = credentials.Certificate(FIREBASE_CONFIG)
+                initialize_app(cred)
                  
             st.session_state.db = firestore.client()
             
             # تحديد مسار التخزين العام (Public path)
             st.session_state.collection_path = f"artifacts/{APP_ID}/public/data/financial_reports"
-            # تم إزالة رسالة النجاح هنا لتجنب تكرارها عند كل إعادة تحميل
             
         else:
             st.warning(fix_arabic("⚠️ لم يتم العثور على إعدادات Firebase. سيتم استخدام التخزين المؤقت للجلسة."))
             st.session_state.collection_path = None
     except Exception as e:
+        # إذا فشلت التهيئة، نعود للتخزين المؤقت
         st.error(fix_arabic(f"❌ فشل في تهيئة Firebase: {e}"))
         st.session_state.collection_path = None
         
@@ -308,7 +314,6 @@ def main():
     st.markdown("---")
     
     # 1. محاولة جلب جميع البيانات المخزنة من Firebase Firestore
-    # نعتمد على دالة @st.cache_data لتحسين الأداء وتجنب الاستدعاءات المتكررة
     all_reports_data = get_all_reports_from_firestore(
         st.session_state.get('db'), 
         st.session_state.get('collection_path')
@@ -338,6 +343,11 @@ def main():
         
         if st.button(fix_arabic("🚀 بدء الاستخلاص والإضافة للسجل الموحد"), key="start_extraction"):
             
+            # التأكد من وجود مفتاح Gemini
+            if not GEMINI_API_KEY:
+                st.error(fix_arabic("🚨 يرجى لصق مفتاح Gemini API في الكود قبل بدء الاستخلاص."))
+                return
+
             with st.spinner(fix_arabic('⏳ جاري تحليل واستخلاص البيانات وتجهيز البلاغ... (قد يستغرق 30-60 ثانية)')):
                 
                 extracted_data = get_llm_multimodal_output(uploaded_file, client)
@@ -350,7 +360,16 @@ def main():
                     
                     # 4. حفظ البيانات (في Firestore أو مؤقتاً)
                     is_saved = False
-                    if st.session_state.get('collection_path'):
+                    
+                    # إعادة تحميل البيانات من Firestore للتأكد من أحدث نسخة (لضمان الرقم التسلسلي الصحيح)
+                    current_reports_data = get_all_reports_from_firestore(st.session_state.get('db'), st.session_state.get('collection_path'))
+                    if current_reports_data is not None:
+                        # تحديث الرقم التسلسلي بناءً على البيانات الأحدث
+                        extracted_data["#"] = len(current_reports_data) + 1
+                        all_reports_data = current_reports_data
+                        reports_count = len(current_reports_data)
+
+                    if st.session_state.get('collection_path') and st.session_state.get('db'):
                         # حفظ دائم
                         is_saved = add_report_to_firestore(st.session_state.db, st.session_state.collection_path, extracted_data)
                         if is_saved:
@@ -366,7 +385,7 @@ def main():
                     if is_saved and all_reports_data:
                         
                         # 5. عرض البيانات المستخلصة للبلاغ الأخير
-                        st.markdown(f"<h3 style='text-align: right;'>{fix_arabic(f'✅ البيانات المستخلصة للبلاغ رقم {next_index} (تحقق سريع)')}</h3>", unsafe_allow_html=True)
+                        st.markdown(f"<h3 style='text-align: right;'>{fix_arabic(f'✅ البيانات المستخلصة للبلاغ رقم {extracted_data['#']} (تحقق سريع)')}</h3>", unsafe_allow_html=True)
                         st.markdown("---")
                         
                         last_report = extracted_data # نستخدم البيانات المستخلصة الجديدة مباشرة للعرض
