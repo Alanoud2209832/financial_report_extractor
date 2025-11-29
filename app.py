@@ -8,36 +8,33 @@ from bidi.algorithm import get_display
 import os
 import json
 import io
-import sys
-import xlsxwriter 
+import time 
+from firebase_admin import initialize_app, firestore, credentials
+from google.cloud.exceptions import NotFound
 
 # ----------------------------------------------------------------
-# 1. إعدادات API والنصوص العربية
+# 1. إعدادات API والنصوص العربية وتهيئة Firebase
 # ----------------------------------------------------------------
 
 # 🚨 هام: قم بتعيين مفتاح API الخاص بكِ هنا!
-# المفتاح السابق تم تعطيله أمنياً. يرجى لصق مفتاح جديد هنا وعدم مشاركته في الدردشة!
 GEMINI_API_KEY = "" # يرجى لصق المفتاح الجديد الصالح هنا!
 
-# التهيئة الآمنة لعميل Gemini
+# تهيئة Gemini Client
 client = None
 try:
     if GEMINI_API_KEY:
-        # استخدام المفتاح لتهيئة العميل بشكل صريح
         client = genai.Client(api_key=GEMINI_API_KEY)
         os.environ['GEMINI_API_KEY'] = GEMINI_API_KEY
     else:
-         # محاولة التهيئة بدون مفتاح (اعتماداً على متغيرات البيئة)
          client = genai.Client()
 except Exception as e:
-    # نقوم بتصحيح عرض الخطأ ليكون عربياً صحيحاً
     error_message = f"فشل في تهيئة عميل Gemini: {e}"
     st.error(get_display(reshape(error_message)))
 
-# التحقق النهائي من حالة العميل
 if client is None:
     st.error(get_display(reshape("❌ فشل في تهيئة عميل Gemini. تأكدي من توفير مفتاح API صالح.")))
-    
+
+# دالة تصحيح النص العربي
 def fix_arabic(text):
     """يعالج النصوص العربية لضمان العرض الصحيح (من اليمين لليسار)."""
     if isinstance(text, str) and text:
@@ -45,6 +42,38 @@ def fix_arabic(text):
         return get_display(reshaped_text)
     return text
 
+# -----------------------------------------------------
+# 🚀 1.1 تهيئة Firebase Firestore للتخزين الدائم
+# -----------------------------------------------------
+
+# تهيئة Firebase باستخدام متغيرات البيئة في Canvas
+if 'db' not in st.session_state:
+    try:
+        # قراءة متغيرات البيئة (متاحة في Canvas)
+        FIREBASE_CONFIG = json.loads(os.environ.get('__firebase_config', '{}'))
+        APP_ID = os.environ.get('__app_id', 'default-app-id')
+        
+        # التأكد من وجود البيانات الأساسية للتهيئة
+        if FIREBASE_CONFIG and APP_ID:
+            
+            # محاولة تهيئة التطبيق مرة واحدة فقط
+            if not initialize_app(): 
+                 cred = credentials.Certificate(FIREBASE_CONFIG)
+                 initialize_app(cred)
+                 
+            st.session_state.db = firestore.client()
+            
+            # تحديد مسار التخزين العام (Public path)
+            st.session_state.collection_path = f"artifacts/{APP_ID}/public/data/financial_reports"
+            # تم إزالة رسالة النجاح هنا لتجنب تكرارها عند كل إعادة تحميل
+            
+        else:
+            st.warning(fix_arabic("⚠️ لم يتم العثور على إعدادات Firebase. سيتم استخدام التخزين المؤقت للجلسة."))
+            st.session_state.collection_path = None
+    except Exception as e:
+        st.error(fix_arabic(f"❌ فشل في تهيئة Firebase: {e}"))
+        st.session_state.collection_path = None
+        
 # ----------------------------------------------------------------
 # 2. وظيفة الاستخلاص عبر Gemini (Multimodal)
 # ----------------------------------------------------------------
@@ -53,7 +82,6 @@ def get_llm_multimodal_output(uploaded_file, client):
     """
     يرسل ملف PDF كبيانات مضمنة مباشرة لـ Gemini لاستخلاص الـ 20 حقلاً المحددة بتنسيق JSON.
     """
-    # التحقق من أن العميل متاح قبل المتابعة
     if client is None:
         st.error(fix_arabic("🚨 لا يمكن التواصل مع Gemini. يرجى التحقق من توفير مفتاح API."))
         return None
@@ -61,7 +89,6 @@ def get_llm_multimodal_output(uploaded_file, client):
     st.info(fix_arabic("⏳ جاري قراءة الملف وإرساله مباشرة لـ Gemini لبدء الاستخلاص..."))
 
     try:
-        # 1. قراءة محتوى الملف والميتا داتا
         uploaded_file.seek(0)
         file_bytes = uploaded_file.read()
         mime_type = uploaded_file.type 
@@ -70,12 +97,10 @@ def get_llm_multimodal_output(uploaded_file, client):
             st.error(fix_arabic(f"صيغة الملف ({mime_type}) غير مدعومة للاستخلاص البصري. الرجاء تحميل PDF أو صورة."))
             return None
 
-        # 2. إنشاء الجزء الخاص بالملف (File Part)
         file_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
 
         st.success(fix_arabic(f"✅ تم تجهيز الملف بنجاح ({uploaded_file.name})"))
 
-        # 3. إعداد المطالبة ونظام التعليمات
         system_prompt = (
             "أنت محرك تحليل واستخلاص بيانات متميز ومتخصص في معالجة نصوص OCR العربية "
             "المشوشة والمقلوبة. مهمتك هي قراءة الملف المرفق وتحليل محتواه البصري والنصي بدقة. "
@@ -134,7 +159,6 @@ def get_llm_multimodal_output(uploaded_file, client):
         }}
         """
 
-        # 4. إعدادات استجابة JSON
         response_config = types.GenerateContentConfig(
             response_mime_type="application/json",
             system_instruction=system_prompt,
@@ -169,15 +193,53 @@ def get_llm_multimodal_output(uploaded_file, client):
         return None
 
 
-# ----------------------------------------------------------------
-# 3. وظيفة إنشاء تقرير Excel
-# ----------------------------------------------------------------
+# -----------------------------------------------------
+# 3. وظائف معالجة البيانات والتخزين (Firebase)
+# -----------------------------------------------------
 
-def create_final_report(extracted_data):
+@st.cache_data(show_spinner=False)
+def get_all_reports_from_firestore(db_client, collection_path):
+    """تحميل جميع المستندات من Firestore."""
+    if not db_client or not collection_path:
+        return None
+    
+    try:
+        reports_ref = db_client.collection(collection_path).stream()
+        all_reports = []
+        for report in reports_ref:
+            report_data = report.to_dict()
+            all_reports.append(report_data)
+            
+        # فرز البيانات حسب الرقم التسلسلي لضمان الترتيب في الإكسل
+        all_reports.sort(key=lambda x: x.get('#', float('inf')))
+        
+        return all_reports
+
+    except Exception as e:
+        st.error(fix_arabic(f"❌ فشل في تحميل البيانات من Firestore: {e}"))
+        return None
+
+
+def add_report_to_firestore(db_client, collection_path, report_data):
+    """إضافة بلاغ جديد إلى Firestore."""
+    if not db_client or not collection_path:
+        return False
+    
+    try:
+        # يضيف مستند جديد بمعرف فريد (Auto-ID)
+        db_client.collection(collection_path).add(report_data)
+        st.cache_data.clear() # إجبار Streamlit على إعادة تحميل البيانات
+        return True
+    except Exception as e:
+        st.error(fix_arabic(f"❌ فشل في حفظ البيانات في Firestore: {e}"))
+        return False
+        
+        
+def create_final_report(all_reports_data):
     """
-    يحول بيانات JSON المستخلصة إلى DataFrame، يضبط ترتيب الأعمدة، وينشئ ملف Excel (xlsx).
+    يحول قائمة القواميس (جميع التقارير) إلى DataFrame، يضبط ترتيب الأعمدة، وينشئ ملف Excel (xlsx).
     """
-    if not extracted_data:
+    if not all_reports_data:
         return None
         
     # نفس ترتيب الأعمدة المطلوبة بالضبط
@@ -190,11 +252,8 @@ def create_final_report(extracted_data):
         "إجمالي الإيداع على الحساب اثناء الدراسة"
     ]
     
-    # تحويل القاموس إلى DataFrame
-    df = pd.DataFrame([extracted_data])
-    
-    # إضافة العمود # (بناءً على كود Colab، سنضيفه كعمود رقم 1)
-    df.insert(0, '#', 1) 
+    # تحويل القائمة الكاملة إلى DataFrame
+    df = pd.DataFrame(all_reports_data)
     
     # ضمان وجود جميع الأعمدة المطلوبة في DataFrame بالترتيب الصحيح
     final_cols = []
@@ -211,7 +270,6 @@ def create_final_report(extracted_data):
     # تطبيق دالة fix_arabic على جميع القيم النصية قبل التصدير
     for col in df.columns:
         if df[col].dtype == 'object':
-            # هذا يضمن أن النص العربي سيكون صحيحاً داخل Excel
             df[col] = df[col].apply(lambda x: get_display(reshape(str(x))) if pd.notna(x) else x)
             
     # إنشاء مخرج Excel في الذاكرة
@@ -219,11 +277,12 @@ def create_final_report(extracted_data):
     
     try:
         writer = pd.ExcelWriter(output, engine='xlsxwriter')
-        df.to_excel(writer, sheet_name=fix_arabic('التقرير المالي'), index=False)
+        sheet_name = fix_arabic('بيانات البلاغات')
+        df.to_excel(writer, sheet_name=sheet_name, index=False)
         
         # تهيئة التنسيق لملف Excel
         workbook  = writer.book
-        worksheet = writer.sheets[fix_arabic('التقرير المالي')]
+        worksheet = writer.sheets[sheet_name]
         worksheet.right_to_left()
 
         # تنسيق العمود 17 (سبب الاشتباه) ليكون ملتفاً وواسعاً
@@ -245,9 +304,29 @@ def create_final_report(extracted_data):
 
 def main():
     st.set_page_config(page_title=fix_arabic("أتمتة استخلاص التقارير المالية"), layout="wide")
-    st.markdown(f"<h1 style='text-align: right;'>{fix_arabic('استخلاص التقارير المالية الآلي 🤖')}</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='text-align: right;'>{fix_arabic('استخلاص التقارير المالية الآلي 🤖 (سجل بيانات موحد)')}</h1>", unsafe_allow_html=True)
     st.markdown("---")
     
+    # 1. محاولة جلب جميع البيانات المخزنة من Firebase Firestore
+    # نعتمد على دالة @st.cache_data لتحسين الأداء وتجنب الاستدعاءات المتكررة
+    all_reports_data = get_all_reports_from_firestore(
+        st.session_state.get('db'), 
+        st.session_state.get('collection_path')
+    )
+    
+    # 2. تحديد عدد البلاغات الحالية واختيار وضع التخزين
+    if st.session_state.get('collection_path') and all_reports_data is not None:
+        reports_count = len(all_reports_data)
+        st.info(fix_arabic(f"💾 وضع التخزين: دائم (Firebase Firestore). عدد البلاغات المخزنة: {reports_count} بلاغ."))
+    else:
+        # استخدام التخزين المؤقت في حال فشل الاتصال بقاعدة البيانات
+        if 'report_data_temp' not in st.session_state:
+            st.session_state.report_data_temp = []
+        all_reports_data = st.session_state.report_data_temp
+        reports_count = len(all_reports_data)
+        st.warning(fix_arabic(f"⚠️ وضع التخزين: مؤقت (جلسة Streamlit). عدد البلاغات المخزنة: {reports_count} بلاغ. **ملاحظة: ستفقد البيانات عند إغلاق المتصفح.**"))
+
+
     uploaded_file = st.file_uploader(
         fix_arabic("📂 قم بتحميل ملف التقرير المالي (PDF/Excel) هنا:"),
         type=["pdf", "xlsx", "xls", "csv"],
@@ -257,52 +336,74 @@ def main():
     if uploaded_file is not None:
         st.success(fix_arabic(f"تم تحميل ملف: {uploaded_file.name}"))
         
-        if st.button(fix_arabic("🚀 بدء الاستخلاص والتحويل إلى Excel"), key="start_extraction"):
+        if st.button(fix_arabic("🚀 بدء الاستخلاص والإضافة للسجل الموحد"), key="start_extraction"):
             
-            with st.spinner(fix_arabic('⏳ جاري تحليل واستخلاص البيانات وتجهيز التقرير... (قد يستغرق 30-60 ثانية)')):
+            with st.spinner(fix_arabic('⏳ جاري تحليل واستخلاص البيانات وتجهيز البلاغ... (قد يستغرق 30-60 ثانية)')):
                 
-                # استدعاء دالة الاستخلاص عبر Gemini
                 extracted_data = get_llm_multimodal_output(uploaded_file, client)
                 
                 if extracted_data:
-                    # 🚀 التعديل 1: يتم عرض العنوان الفرعي بشكل صحيح
-                    st.markdown(f"<h3 style='text-align: right;'>{fix_arabic('✅ البيانات المستخلصة (تحقق سريع)')}</h3>", unsafe_allow_html=True)
                     
-                    st.markdown("---")
+                    # 3. تحديد الرقم التسلسلي الجديد
+                    next_index = reports_count + 1
+                    extracted_data["#"] = next_index 
                     
-                    # 🚀 التعديل 2: التكرار على كل حقل وعرضه بشكل منفصل لضمان تنسيق RTL وعرضه على سطر جديد
-                    for key, value in extracted_data.items():
-                        # نقوم بتشكيل (Reshape) كل من المفتاح والقيمة بشكل منفصل
-                        display_key = fix_arabic(key)
-                        display_value = fix_arabic(value)
-                        
-                        # نستخدم HTML و CSS لفرض اتجاه RTL، عرض المفتاح بخط عريض، وجعل كل حقل في سطر جديد
-                        # استخدام وسم <p> مع الهوامش يضمن أن يكون كل حقل في سطر منفصل ومرتب.
-                        html_line = f"""
-                        <p style="direction: rtl; text-align: right; margin-bottom: 5px;">
-                            <span style="font-weight: bold; color: #1e40af;">{display_key}:</span>
-                            {display_value}
-                        </p>
-                        """
-                        st.markdown(html_line, unsafe_allow_html=True)
-
-
-                    st.markdown("---")
-                    
-                    excel_data_bytes = create_final_report(extracted_data)
-                    
-                    if excel_data_bytes:
-                        st.subheader(fix_arabic("🎉 التقرير جاهز للتحميل"))
-                        st.balloons()
-                        
-                        st.download_button(
-                            label=fix_arabic("⬇️ تحميل ملف التقرير النهائي (Excel)"),
-                            data=excel_data_bytes,
-                            file_name=f"{uploaded_file.name.replace('.pdf', '')}_Extracted_Data.xlsx",
-                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                        )
+                    # 4. حفظ البيانات (في Firestore أو مؤقتاً)
+                    is_saved = False
+                    if st.session_state.get('collection_path'):
+                        # حفظ دائم
+                        is_saved = add_report_to_firestore(st.session_state.db, st.session_state.collection_path, extracted_data)
+                        if is_saved:
+                            # إعادة تحميل البيانات من Firestore بعد الإضافة لضمان التحديث الفوري
+                            all_reports_data = get_all_reports_from_firestore(st.session_state.db, st.session_state.collection_path)
                     else:
-                        st.error(fix_arabic("❌ فشل في إنشاء ملف Excel. الرجاء مراجعة سجل الأخطاء."))
+                        # حفظ مؤقت
+                        st.session_state.report_data_temp.append(extracted_data)
+                        is_saved = True
+                        all_reports_data = st.session_state.report_data_temp
+
+
+                    if is_saved and all_reports_data:
+                        
+                        # 5. عرض البيانات المستخلصة للبلاغ الأخير
+                        st.markdown(f"<h3 style='text-align: right;'>{fix_arabic(f'✅ البيانات المستخلصة للبلاغ رقم {next_index} (تحقق سريع)')}</h3>", unsafe_allow_html=True)
+                        st.markdown("---")
+                        
+                        last_report = extracted_data # نستخدم البيانات المستخلصة الجديدة مباشرة للعرض
+                        
+                        for key, value in last_report.items():
+                            display_key = fix_arabic(key)
+                            display_value = fix_arabic(value)
+                            
+                            # الحل النهائي لـ Bidi: عرض المفتاح والقيمة مفصولين بوضوح داخل وسم RTL
+                            html_line = f"""
+                            <div style="direction: rtl; text-align: right; margin-bottom: 5px; line-height: 1.5; font-size: 16px;">
+                                <span style="font-weight: bold; color: #155e75;">{display_key}:</span>
+                                <span style="margin-right: 5px;">{display_value}</span>
+                            </div>
+                            """
+                            st.markdown(html_line, unsafe_allow_html=True)
+
+                        st.markdown("---")
+                        
+                        # 6. إنشاء ملف الإكسل الموحد من جميع البيانات المخزنة
+                        excel_data_bytes = create_final_report(all_reports_data)
+                        
+                        if excel_data_bytes:
+                            st.subheader(fix_arabic("🎉 تم حفظ البلاغ! قم بتحميل السجل الموحد"))
+                            st.balloons()
+                            
+                            st.download_button(
+                                label=fix_arabic("⬇️ تحميل سجل بيانات البلاغ الموحد (بيانات البلاغ.xlsx)"),
+                                data=excel_data_bytes,
+                                file_name=fix_arabic("بيانات البلاغ.xlsx"),
+                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                            )
+                        else:
+                            st.error(fix_arabic("❌ فشل في إنشاء ملف Excel. الرجاء مراجعة سجل الأخطاء."))
+                    else:
+                        st.error(fix_arabic("❌ فشلت عملية حفظ البيانات. الرجاء المحاولة مرة أخرى."))
+
 
 if __name__ == '__main__':
     main()
