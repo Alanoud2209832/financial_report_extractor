@@ -28,12 +28,10 @@ try:
     else:
          client = genai.Client()
 except Exception as e:
-    # استخدام st.error هنا لأنها قبل تهيئة الواجهة الكاملة
     error_message = f"فشل في تهيئة عميل Gemini: {e}"
     st.error(get_display(reshape(error_message)))
 
 if client is None:
-    # استخدام st.error هنا لأنها قبل تهيئة الواجهة الكاملة
     st.error(get_display(reshape("❌ فشل في تهيئة عميل Gemini. تأكدي من توفير مفتاح API صالح.")))
 
 # دالة تصحيح النص العربي (تستخدم Reshaper و BiDi)
@@ -80,6 +78,8 @@ def rtl_markdown(content, style_type="info"):
 # تهيئة Firebase باستخدام متغيرات البيئة في Canvas
 if 'db' not in st.session_state:
     st.session_state.firebase_ready = False
+    st.session_state.collection_path = None
+    
     try:
         # قراءة متغيرات البيئة (المتاحة في Canvas)
         FIREBASE_CONFIG_JSON = os.environ.get('__firebase_config', '{}')
@@ -105,11 +105,11 @@ if 'db' not in st.session_state:
             st.session_state.firebase_ready = True
             
         else:
-            rtl_markdown("❌ فشل في إعداد Firebase (Config). **يجب توفير إعدادات Firebase للتخزين الدائم.**", "error")
-            st.session_state.collection_path = None
+            rtl_markdown("⚠️ فشل في إعداد Firebase (Config). سيتم استخدام **التخزين المؤقت** حتى يتم توفير إعدادات صحيحة.", "warning")
+            # لا يتم تعيين collection_path أو db هنا، وتبقى firebase_ready = False
     except Exception as e:
-        rtl_markdown(f"❌ فشل في تهيئة Firebase بسبب خطأ غير متوقع: {e}", "error")
-        st.session_state.collection_path = None
+        rtl_markdown(f"❌ فشل في تهيئة Firebase بسبب خطأ غير متوقع: {e}. سيتم استخدام **التخزين المؤقت**.", "error")
+        # لا يتم تعيين collection_path أو db هنا، وتبقى firebase_ready = False
         
 # ----------------------------------------------------------------
 # 2. وظيفة الاستخلاص عبر Gemini (Multimodal)
@@ -220,7 +220,6 @@ def get_llm_multimodal_output(uploaded_file, client):
             return None
 
     except APIError as e:
-        # معالجة خاصة لخطأ 403 (المرتبط بتسريب المفتاح)
         error_details = str(e)
         if "403 PERMISSION_DENIED" in error_details or "leaked" in error_details:
              rtl_markdown("🚨 خطأ 403 (PERMISSION_DENIED): مفتاح Gemini API الذي تستخدمه معطل أو تم الإبلاغ عن تسريبه. **الرجاء استبداله بمفتاح API جديد وصالح في السطر رقم 14**.", "error")
@@ -240,47 +239,65 @@ def get_llm_multimodal_output(uploaded_file, client):
 # -----------------------------------------------------
 
 @st.cache_data(show_spinner=False)
-def get_all_reports_from_firestore(db_client, collection_path):
-    """تحميل جميع المستندات من Firestore."""
-    # شرط أساسي: يجب أن تكون Firebase جاهزة
-    if not st.session_state.get('firebase_ready') or not db_client or not collection_path:
-        return None # العودة بـ None لتعطيل التطبيق عند الفشل في الاتصال الدائم
-    
-    try:
-        reports_ref = db_client.collection(collection_path).stream()
-        all_reports = []
-        for report in reports_ref:
-            report_data = report.to_dict()
-            report_data['doc_id'] = report.id 
-            all_reports.append(report_data)
+def get_all_reports_data():
+    """تحميل جميع المستندات من Firestore (إذا كانت متاحة) أو من الذاكرة المؤقتة."""
+    # 1. إذا كانت Firebase جاهزة، يتم التحميل من Firestore (التخزين الدائم)
+    if st.session_state.get('firebase_ready'):
+        db_client = st.session_state.get('db')
+        collection_path = st.session_state.get('collection_path')
+        
+        try:
+            reports_ref = db_client.collection(collection_path).stream()
+            all_reports = []
+            for report in reports_ref:
+                report_data = report.to_dict()
+                report_data['doc_id'] = report.id 
+                all_reports.append(report_data)
+                
+            all_reports.sort(key=lambda x: x.get('#', float('inf')))
+            return all_reports
+        
+        except Exception as e:
+            # في حال فشل الاتصال بقاعدة البيانات رغم تهيئتها، نعود لقائمة فارغة 
+            st.error(fix_arabic(f"❌ فشل في تحميل البيانات من Firestore: {e}. سيتم عرض سجل فارغ مؤقتًا."))
+            return []
             
-        all_reports.sort(key=lambda x: x.get('#', float('inf')))
+    # 2. إذا لم تكن Firebase جاهزة، يتم التحميل من الذاكرة المؤقتة (session_state)
+    else:
+        if 'report_data_temp' not in st.session_state:
+            st.session_state.report_data_temp = []
+        return st.session_state.report_data_temp
+
+
+def add_report_to_storage(report_data):
+    """إضافة بلاغ جديد إلى Firestore (إذا كان متاحاً) أو إلى الذاكرة المؤقتة."""
+    # 1. محاولة الحفظ في Firestore (التخزين الدائم)
+    if st.session_state.get('firebase_ready'):
+        db_client = st.session_state.get('db')
+        collection_path = st.session_state.get('collection_path')
         
-        return all_reports
+        data_to_save = report_data.copy()
+        if 'doc_id' in data_to_save:
+            del data_to_save['doc_id']
+            
+        try:
+            db_client.collection(collection_path).add(data_to_save)
+            st.cache_data.clear() # مسح الذاكرة المؤقتة لإعادة التحميل من DB
+            rtl_markdown("✅ تم الحفظ بنجاح في قاعدة البيانات الدائمة (Firebase Firestore).", "success")
+            return True
+        except Exception as e:
+            rtl_markdown(f"❌ فشل في حفظ البيانات في Firestore: {e}. سيتم حفظها بشكل مؤقت.", "error")
+            # في حال فشل الحفظ الدائم، ننتقل للحفظ المؤقت كنسخة احتياطية
+            st.session_state.report_data_temp.append(report_data)
+            return True # نعتبر العملية ناجحة لأنه تم حفظها في الجلسة
 
-    except Exception as e:
-        st.error(fix_arabic(f"❌ فشل في تحميل البيانات من Firestore. لا يمكن عرض السجل الموحد: {e}"))
-        return None
-
-
-def add_report_to_firestore(db_client, collection_path, report_data):
-    """إضافة بلاغ جديد إلى Firestore."""
-    if not st.session_state.get('firebase_ready') or not db_client or not collection_path:
-        rtl_markdown("❌ فشل في الحفظ: قاعدة البيانات الدائمة غير متاحة أو غير مهيأة بشكل صحيح.", "error")
-        return False
-    
-    data_to_save = report_data.copy()
-    if 'doc_id' in data_to_save:
-        del data_to_save['doc_id']
-        
-    try:
-        db_client.collection(collection_path).add(data_to_save)
-        # مسح ذاكرة التخزين المؤقت للبيانات لضمان إعادة التحميل من DB
-        st.cache_data.clear()
+    # 2. الحفظ في الذاكرة المؤقتة (عند عدم توفر Firebase)
+    else:
+        if 'report_data_temp' not in st.session_state:
+            st.session_state.report_data_temp = []
+        st.session_state.report_data_temp.append(report_data)
+        rtl_markdown("⚠️ تم الحفظ بنجاح في **الذاكرة المؤقتة للجلسة**. ستفقد البيانات عند تحديث الصفحة أو إغلاق المتصفح.", "warning")
         return True
-    except Exception as e:
-        rtl_markdown(f"❌ فشل في حفظ البيانات في Firestore: {e}", "error")
-        return False
         
         
 def create_final_report(all_reports_data):
@@ -350,30 +367,21 @@ def main():
     st.markdown(f"<h1 style='text-align: right; direction: rtl;'>{fix_arabic('استخلاص التقارير المالية الآلي 🤖 (سجل بيانات موحد)')}</h1>", unsafe_allow_html=True)
     st.markdown("---")
     
-    # 1. التحقق من جاهزية Firebase
-    if not st.session_state.get('firebase_ready'):
-        rtl_markdown("🚨 التخزين الدائم غير متاح. يرجى مراجعة إعدادات Firebase لضمان حفظ البيانات بشكل دائم وتجنب فقدانها عند تحديث الصفحة.", "error")
-        return
-        
-    # 2. تحميل جميع البيانات الحالية (من Firestore فقط)
-    all_reports_data = get_all_reports_from_firestore(
-        st.session_state.get('db'), 
-        st.session_state.get('collection_path')
-    )
+    # 1. تحميل جميع البيانات الحالية (من Firestore أو الذاكرة المؤقتة)
+    all_reports_data = get_all_reports_data()
     
-    if all_reports_data is None:
-        # إذا لم يتمكن من تحميل البيانات من Firebase بالرغم من جاهزيتها
-        rtl_markdown("❌ فشل في قراءة السجل الموحد من Firebase Firestore. تأكد من قواعد الأمان ومن اتصالك بالإنترنت.", "error")
-        return
-
-    # 3. عرض حالة التخزين (وهي الآن دائمة)
+    # 2. عرض حالة التخزين
     reports_count = len(all_reports_data)
-    rtl_markdown(f"💾 وضع التخزين: **دائم (Firebase Firestore)**. عدد البلاغات المخزنة: {reports_count} بلاغ.", "info")
+    if st.session_state.get('firebase_ready'):
+        rtl_markdown(f"💾 وضع التخزين: **دائم (Firebase Firestore)**. عدد البلاغات المخزنة: {reports_count} بلاغ.", "info")
+    else:
+        # هذه الرسالة ستظهر عندما يفشل إعداد Firebase
+        rtl_markdown(f"⚠️ وضع التخزين: **مؤقت (جلسة Streamlit)**. عدد البلاغات المخزنة: {reports_count} بلاغ. **لن تفقد البيانات في التحديثات الجزئية، لكنها ستفقد في التحديث الكامل (F5) أو إغلاق المتصفح.**", "warning")
 
     st.markdown("---") 
 
     # ------------------------------------------------------------------
-    # 4. عرض السجل الموحد الثابت (الخانة المطلوبة)
+    # 3. عرض السجل الموحد الثابت
     # ------------------------------------------------------------------
     st.markdown(f"<h3 style='text-align: right; direction: rtl; color: #1e40af;'>{fix_arabic('📊 السجل الموحد الحالي (بيانات ثابتة)')}</h3>", unsafe_allow_html=True)
     
@@ -419,7 +427,7 @@ def main():
     st.markdown("---") # فاصل قبل محمل الملف
 
 
-    # 5. محمل الملف ومنطق الاستخلاص
+    # 4. محمل الملف ومنطق الاستخلاص
     uploaded_file = st.file_uploader(
         fix_arabic("📂 قم بتحميل ملف التقرير المالي (PDF/Excel) هنا:"),
         type=["pdf", "xlsx", "xls", "csv"],
@@ -441,20 +449,16 @@ def main():
                 
                 if extracted_data:
                     
-                    # حساب وإضافة الرقم التسلسلي (#) بناءً على عدد التقارير الحالي من DB
+                    # حساب وإضافة الرقم التسلسلي (#) بناءً على عدد التقارير الحالي
                     reports_count_for_new_doc = len(all_reports_data) + 1
                     extracted_data["#"] = reports_count_for_new_doc
                     
-                    # 6. عرض البيانات المستخلصة للبلاغ الأخير
+                    # 5. عرض البيانات المستخلصة للبلاغ الأخير
                     st.markdown(f"<h3 style='text-align: right; direction: rtl; color: #059669;'>{fix_arabic(f'✅ البيانات المستخلصة للبلاغ رقم {extracted_data['#']} (تحقق سريع)')}</h3>", unsafe_allow_html=True)
                     st.markdown("---")
 
-                    # 7. حفظ البيانات (في Firestore فقط)
-                    is_saved = add_report_to_firestore(
-                        st.session_state.db, 
-                        st.session_state.collection_path, 
-                        extracted_data
-                    )
+                    # 6. حفظ البيانات (في Firebase أو مؤقتاً)
+                    is_saved = add_report_to_storage(extracted_data)
 
                     if is_saved:
                         
@@ -473,11 +477,9 @@ def main():
                             st.markdown(html_line, unsafe_allow_html=True)
 
                         st.markdown("---")
-                        # إعادة تشغيل التطبيق لعرض الجدول المحدث بالبيانات الجديدة المحملة من Firebase
+                        # إعادة تشغيل التطبيق لعرض الجدول المحدث بالبيانات الجديدة
                         st.rerun()
-                    else:
-                        # رسالة فشل الحفظ تظهر داخل دالة add_report_to_firestore
-                        pass
+                    # ملاحظة: رسالة فشل الحفظ الدائم تظهر داخل دالة add_report_to_storage
 
 
 if __name__ == '__main__':
