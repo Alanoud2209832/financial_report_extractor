@@ -13,7 +13,6 @@ from google.genai.errors import APIError
 # 🚨 هام: يجب تعيين مفتاح API الخاص بكِ هنا!
 # يرجى استبدال النص الفارغ التالي بمفتاح Gemini API الصالح
 GEMINI_API_KEY = "AIzaSyBVJvH_Z5AX9dwXR7UFhbeo9iB5-aL-rZI" 
-
 # تهيئة موديل Gemini
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
 SYSTEM_PROMPT = (
@@ -115,7 +114,6 @@ def extract_financial_data(file_bytes, file_name, file_type):
 
 def create_final_report(extracted_data):
     """تحويل البيانات المستخلصة إلى ملف Excel (XLSX) بتنسيق RTL."""
-    # لا يحتاج هذا الجزء إلى أي مكتبات قاعدة بيانات
     import xlsxwriter
     
     if not extracted_data:
@@ -147,7 +145,10 @@ def create_final_report(extracted_data):
         worksheet.right_to_left()
 
         col_format = workbook.add_format({'text_wrap': True, 'align': 'right', 'valign': 'top'})
-        worksheet.set_column('R:R', 60, col_format) 
+        
+        # العمود 'سبب الاشتباه' هو العمود رقم 21 (يُرمز له بـ U في Excel)
+        # نضبط عرضه على 100 لضمان ظهور النص الطويل بالكامل
+        worksheet.set_column('U:U', 100, col_format) 
         
         writer.close()
         output.seek(0)
@@ -186,9 +187,9 @@ def main():
     st.caption("هذا التطبيق يستخلص البيانات من الملف المحمل مباشرة ويحولها إلى Excel دون تخزين للبيانات.")
     st.markdown("---")
     
-    # ⚠️ فحص المفتاح: إذا كانت الصفحة فارغة فهذا هو السبب الأرجح
+    # ⚠️ فحص المفتاح
     if GEMINI_API_KEY == "هنا يجب أن يكون مفتاحك" or not GEMINI_API_KEY:
-        st.error("🚨 الخطأ الأساسي: الرجاء لصق مفتاح Gemini API الصالح في متغير `GEMINI_API_KEY` داخل الكود (السطر 18).")
+        st.error("🚨 الخطأ الأساسي: الرجاء لصق مفتاح Gemini API الصالح في متغير `GEMINI_API_KEY` داخل الكود.")
         return # إيقاف التنفيذ
 
     # قسم تحميل الملف
