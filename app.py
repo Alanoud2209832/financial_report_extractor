@@ -3,186 +3,94 @@ import pandas as pd
 import json
 import io
 import time
-import sqlite3
+import base64
+import os
+# تأكدنا من عدم استخدام SQLite أو Session State
 import fitz # PyMuPDF library for PDF processing
 from PIL import Image # Pillow library for image handling
 from google import genai
 from google.genai.errors import APIError
-import base64
 
 # ----------------------------------------------------------------
-# 1. API Settings, Arabic Texts, and Database Initialization
+# 1. إعدادات API والثوابت والحقول المطلوبة
 # ----------------------------------------------------------------
 
-# 🚨 IMPORTANT: Set your API Key here!
-# Please replace the following placeholder with your valid Gemini API Key
-GEMINI_API_KEY = "AIzaSyBVJvH_Z5AX9dwXR7UFhbeo9iB5-aL-rZI" # ⬅️ Please paste your valid key here
+# 🚨 هام: يجب تعيين مفتاح API الخاص بكِ هنا!
+# يرجى استبدال النص الفارغ التالي بمفتاح Gemini API الصالح
+GEMINI_API_KEY = "AIzaSyBVJvH_Z5AX9dwXR7UFhbeo9iB5-aL-rZI" # ⬅️ يرجى لصق المفتاح الصالح هنا بين علامات التنصيص
 
-# Gemini Model Configuration
+# تهيئة موديل Gemini (نستخدم flash للسرعة والأداء الممتاز في الاستخلاص)
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
 SYSTEM_PROMPT = (
     "أنت خبير في تحليل التقارير المالية. مهمتك هي قراءة النص والصورة المستخرجة من وثيقة "
-    "مالية وتحويله إلى كائن JSON وفقًا للمخطط المحدد. يجب أن تكون دقيقًا جدًا في "
-    "استخلاص القيم وأن تتأكد من مطابقتها لأسماء الحقول المطلوبة باللغة الإنجليزية. "
-    "استخدم القيمة 'N/A' للحقول غير الموجودة."
+    "مالية وتحويله إلى كائن JSON وفقًا للمخطط المحدد بدقة. يجب أن تكون دقيقًا جدًا في "
+    "استخلاص القيم. قم بتصحيح أي انعكاس أو تشويش في النص العربي قبل الاستخلاص. "
+    "استخدم القيمة 'غير متوفر' للحقول غير الموجودة."
 )
 
-# Required Fields (English keys for JSON stability) and their Arabic equivalent for display
-REPORT_FIELD_MAP = {
-    "issue_number": "رقم الصادر",
-    "issue_date": "تاريخ الصادر",
-    "suspect_name": "اسم المشتبه به",
-    "id_number": "رقم الهوية",
-    "nationality": "الجنسية",
-    "birth_date": "تاريخ الميلاد",
-    "entry_date": "تاريخ الدخول",
-    "social_status": "الحالة الاجتماعية",
-    "profession": "المهنة",
-    "phone_number": "رقم الجوال",
-    "city": "المدينة",
-    "account_balance": "رصيد الحساب",
-    "annual_income": "الدخل السنوي",
-    "incoming_number": "رقم الوارد",
-    "incoming_date": "تاريخ الوارد",
-    "employer_id": "رقم السجل التجاري لصاحب العمل",
-    "suspicion_reason": "سبب الاشتباه",
-    "study_start_date": "تاريخ بداية الدراسة",
-    "study_end_date": "تاريخ نهاية الدراسة",
-    "total_deposit_during_study": "إجمالي الإيداع أثناء الدراسة"
-}
-REPORT_FIELDS = list(REPORT_FIELD_MAP.keys())
+# أسماء الحقول المطلوبة باللغة العربية (كما طلبتِ أن تكون في JSON و Excel)
+REPORT_FIELDS_ARABIC = [
+    "رقم الصادر", "تاريخ الصادر", "اسم المشتبه به", "رقم الهوية",
+    "الجنسية", "تاريخ الميلاد الوافد", "تاريخ الدخول", "الحالة الاجتماعية",
+    "المهنة", "رقم الجوال", "المدينة", "رصيد الحساب", "الدخل السنوي",
+    "رقم الوارد", "تاريخ الوارد", "رقم صاحب العمل/ السجل التجاري",
+    "سبب الاشتباه", "تاريخ الدارسة من", "تاريخ الدراسة الى",
+    "إجمالي الإيداع على الحساب اثناء الدراسة"
+]
 
-# Response Schema for Gemini (JSON Schema) - including Arabic description
+# مخطط الاستجابة لـ Gemini (JSON Schema) - يستخدم الحقول العربية مباشرة
 RESPONSE_SCHEMA = {
     "type": "OBJECT",
     "properties": {
         field: {
             "type": "STRING", 
-            "description": f"القيمة المستخلصة لـ: {REPORT_FIELD_MAP[field]}"
-        } for field in REPORT_FIELDS
+            "description": f"القيمة المستخلصة لـ: {field}"
+        } for field in REPORT_FIELDS_ARABIC
     },
-    "propertyOrdering": REPORT_FIELDS
+    "propertyOrdering": REPORT_FIELDS_ARABIC
 }
 
 # ----------------------------------------------------------------
-# 2. SQLite Functions (Persistent Storage)
-# ----------------------------------------------------------------
-
-DB_FILE = 'financial_data.db'
-
-# Create database connection
-@st.cache_resource
-def get_db_connection():
-    """Establishes an SQLite database connection."""
-    conn = None
-    try:
-        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
-    except sqlite3.Error as e:
-        st.error(f"خطأ في الاتصال بقاعدة البيانات SQLite: {e}")
-        return None
-
-# Initialize the database table
-def init_db(conn):
-    """Creates the 'reports' table if it doesn't exist."""
-    if conn:
-        try:
-            field_definitions = ", ".join([f"{field} TEXT" for field in REPORT_FIELDS])
-            conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS reports (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_name TEXT,
-                    {field_definitions},
-                    extraction_timestamp TEXT
-                );
-            """)
-            conn.commit()
-        except sqlite3.Error as e:
-            st.error(f"خطأ في تهيئة جدول قاعدة البيانات: {e}")
-
-# Fetch all data from the database
-def fetch_all_reports(conn):
-    """Fetches all records from the 'reports' table."""
-    if conn:
-        try:
-            reports = conn.execute("SELECT * FROM reports ORDER BY extraction_timestamp DESC").fetchall()
-            return [dict(report) for report in reports]
-        except sqlite3.Error as e:
-            st.error(f"خطأ في جلب التقارير: {e}")
-            return []
-    return []
-
-# Insert a new report into the database
-def insert_report(conn, data):
-    """Inserts the extracted report data into the database."""
-    if conn:
-        try:
-            # Ensure all required fields and metadata are present
-            data_to_insert = {field: data.get(field, 'N/A') for field in REPORT_FIELDS}
-            data_to_insert['file_name'] = data.get('file_name', 'N/A')
-            data_to_insert['extraction_timestamp'] = data.get('extraction_timestamp', pd.Timestamp.now().isoformat())
-
-            columns = ', '.join(data_to_insert.keys())
-            placeholders = ', '.join('?' * len(data_to_insert))
-            values = tuple(data_to_insert.values())
-            
-            conn.execute(f"INSERT INTO reports ({columns}) VALUES ({placeholders})", values)
-            conn.commit()
-            return True
-        except sqlite3.Error as e:
-            st.error(f"خطأ في حفظ التقرير في قاعدة البيانات: {e}")
-            return False
-    return False
-
-# ----------------------------------------------------------------
-# 3. File Processing and Extraction Function
+# 2. وظائف معالجة الملفات والاستخلاص (لا يوجد تخزين دائم)
 # ----------------------------------------------------------------
 
 def convert_pdf_to_images(file_bytes):
-    """Converts a PDF file (as bytes) to a list of PNG image bytes."""
+    """تحويل ملف PDF إلى قائمة من صور PNG (باستخدام الصفحة الأولى فقط)."""
     try:
         # Check if fitz (PyMuPDF) is available
         if 'fitz' not in globals():
              st.error("خطأ: مكتبة PyMuPDF (fitz) غير مثبتة. الرجاء تثبيتها باستخدام الأمر: pip3 install PyMuPDF")
              return []
-
+             
         pdf_document = fitz.open(stream=file_bytes, filetype="pdf")
-        
-        # Target the first page only
         page = pdf_document.load_page(0)
-        
-        # Create a high-resolution pixel map (zoom 3.0 for better text clarity)
-        matrix = fitz.Matrix(3.0, 3.0)
+        matrix = fitz.Matrix(3.0, 3.0) # دقة عالية لـ OCR أفضل
         pix = page.get_pixmap(matrix=matrix)
-        
-        # Convert pixel data to raw bytes for sending
         img_bytes = pix.tobytes(output='png')
-        
         return [img_bytes]
     except Exception as e:
-        st.error(f"حدث خطأ أثناء تحويل PDF إلى صورة: {e}. قد يكون السبب هو عدم التثبيت الصحيح لمكتبة PyMuPDF.")
+        st.error(f"حدث خطأ أثناء تحويل PDF إلى صورة: {e}. يرجى التأكد من تثبيت PyMuPDF.")
         return []
 
 def extract_financial_data(file_bytes, file_name, file_type):
     """
-    Receives file data and uses the Gemini API to extract financial data
-    and insert it directly into the database.
+    يتلقى بيانات الملف ويستخدم Gemini API لاستخلاص البيانات المالية
+    وإرجاعها مباشرة كـ JSON.
     """
     if not GEMINI_API_KEY:
-        st.error("الرجاء تحديث 'GEMINI_API_KEY' في الكود بمفتاح صالح قبل تحميل الملف.")
-        return False
+        st.error("🚨 الرجاء تحديث 'GEMINI_API_KEY' في الكود بمفتاح صالح قبل تحميل الملف.")
+        return None
         
     response = None
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
         
-        # 1. Define Multimodal Content
+        # 1. تحديد المحتوى المتعدد الوسائط
         content_parts = [
             "قم باستخلاص جميع البيانات من هذه الوثيقة المالية "
             "وحوّلها إلى كائن JSON يطابق المخطط المحدد بدقة. "
-            "يرجى استخدام الحقول الإنجليزية (issue_number, etc.) كمفاتيح JSON. "
-            "إذا لم تتمكن من العثور على قيمة حقل معين، استخدم 'N/A'."
+            "يرجى استخدام الحقول العربية المطلوبة كمفاتيح JSON. "
+            "إذا لم تتمكن من العثور على قيمة حقل معين، ضع القيمة: 'غير متوفر'."
         ]
         
         if file_type == 'pdf':
@@ -190,19 +98,17 @@ def extract_financial_data(file_bytes, file_name, file_type):
             image_bytes_list = convert_pdf_to_images(file_bytes)
             
             if not image_bytes_list:
-                return False # Conversion failed
+                return None
                 
-            # Add image bytes to the request content
             for img_bytes in image_bytes_list:
                 content_parts.append({
                     "inlineData": {
-                        "data": base64.b64encode(img_bytes).decode('utf-8'), # Base64 encoding for API call
+                        "data": base64.b64encode(img_bytes).decode('utf-8'),
                         "mimeType": "image/png"
                     }
                 })
         
         elif file_type in ['png', 'jpg', 'jpeg']:
-            # Add the original image directly
             content_parts.append({
                 "inlineData": {
                     "data": base64.b64encode(file_bytes).decode('utf-8'),
@@ -211,17 +117,17 @@ def extract_financial_data(file_bytes, file_name, file_type):
             })
         else:
             st.error(f"نوع الملف غير مدعوم: {file_type}")
-            return False
+            return None
 
-        # 2. Generation Configuration
+        # 2. إعدادات التوليد
         config = {
             "systemInstruction": SYSTEM_PROMPT,
             "responseMimeType": "application/json",
             "responseSchema": RESPONSE_SCHEMA,
         }
 
-        # 3. Request Content Generation
-        st.info(f"جاري استخلاص البيانات من '{file_name}'...")
+        # 3. طلب توليد المحتوى
+        st.info(f"⏳ جاري استخلاص البيانات من '{file_name}'...")
         
         response = client.models.generate_content(
             model=MODEL_NAME,
@@ -229,105 +135,147 @@ def extract_financial_data(file_bytes, file_name, file_type):
             config=config,
         )
 
-        # 4. Process Response and Save to SQLite
+        # 4. معالجة الاستجابة
         json_output = response.text
         extracted_data = json.loads(json_output)
         
-        # Add basic data
-        extracted_data['file_name'] = file_name
-        extracted_data['extraction_timestamp'] = pd.Timestamp.now().isoformat()
+        # إضافة اسم الملف ووقت الاستخلاص (للمرجع في الجدول النهائي)
+        extracted_data['اسم الملف'] = file_name
+        extracted_data['وقت الاستخلاص'] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        conn = get_db_connection()
-        if conn and insert_report(conn, extracted_data):
-            st.success(f"تم استخلاص وحفظ التقرير: '{file_name}' بنجاح!")
-            return True
-        else:
-            st.error("فشل في حفظ البيانات في قاعدة البيانات.")
-            return False
+        st.success(f"✅ تم استخلاص البيانات من التقرير: '{file_name}' بنجاح!")
+        return extracted_data
 
     except APIError as e:
-        st.error(f"خطأ في الاتصال بـ Gemini API. تأكدي من صحة المفتاح. الخطأ: {e}")
+        st.error(f"🚨 خطأ في الاتصال بـ Gemini API. تأكدي من صحة المفتاح. الخطأ: {e}")
     except json.JSONDecodeError:
-        st.error(f"فشل في تفسير استجابة النموذج كـ JSON. (الاستجابة: {json_output if 'json_output' in locals() else 'N/A'})")
+        st.error(f"❌ فشل في تفسير استجابة النموذج كـ JSON. يرجى مراجعة الاستجابة.")
     except Exception as e:
-        st.error(f"حدث خطأ غير متوقع: {e}")
-        if response and response.text:
-            st.code(response.text)
-    return False
+        st.error(f"❌ حدث خطأ غير متوقع: {e}")
+    return None
+
+def create_final_report(extracted_data):
+    """تحويل البيانات المستخلصة إلى ملف Excel (XLSX) بتنسيق RTL."""
+    if not extracted_data:
+        return None
+        
+    # تحديد ترتيب الأعمدة في ملف Excel النهائي
+    column_order = ["#", "اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
+    
+    # تحويل البيانات إلى إطار بيانات (DataFrame)
+    df = pd.DataFrame([extracted_data])
+    df.insert(0, '#', 1)
+    
+    # إعادة ترتيب الأعمدة وإضافة الأعمدة الناقصة (لضمان وجود الـ 20 حقل)
+    final_cols = []
+    for col in column_order:
+        if col in df.columns: 
+            final_cols.append(col)
+        elif col not in df.columns:
+            df[col] = 'غير متوفر'
+            final_cols.append(col)
+            
+    df = df[final_cols]
+    
+    output = io.BytesIO()
+    
+    try:
+        # استخدام xlsxwriter لإنشاء ملف Excel ودعم RTL والتنسيق
+        writer = pd.ExcelWriter(output, engine='xlsxwriter')
+        df.to_excel(writer, sheet_name='التقرير المالي', index=False)
+        
+        workbook  = writer.book
+        worksheet = writer.sheets['التقرير المالي']
+        worksheet.right_to_left()
+
+        # تنسيق العمود الخاص بـ "سبب الاشتباه" لضمان ظهور النص كاملاً
+        col_format = workbook.add_format({'text_wrap': True, 'align': 'right', 'valign': 'top'})
+        # نفترض أن عمود "سبب الاشتباه" هو العمود رقم 17 (حسب الترتيب المحدد)
+        worksheet.set_column('R:R', 60, col_format) 
+        
+        writer.close()
+        output.seek(0)
+        
+        return output.read()
+        
+    except Exception as e:
+        st.error(f"🚨 حدث خطأ أثناء إنشاء ملف Excel: {e}")
+        return None
+
 
 # ----------------------------------------------------------------
-# 4. User Interface (Streamlit UI)
+# 3. واجهة المستخدم (Streamlit UI)
 # ----------------------------------------------------------------
 
-st.set_page_config(layout="wide", page_title="أداة استخلاص وتقارير مالية")
+def main():
+    st.set_page_config(layout="wide", page_title="أداة استخلاص وتقارير مالية")
 
-st.markdown("""
-<style>
-    .reportview-container .main {
-        padding-top: 2rem;
-    }
-    .stButton>button {
-        background-color: #0F9D58; 
-        color: white; 
-        border-radius: 8px;
-        padding: 10px 20px;
-    }
-    .stApp {
-        background-color: #f0f2f6;
-    }
-</style>
-""", unsafe_allow_html=True)
+    st.markdown("""
+    <style>
+        .stApp { background-color: #f0f2f6; }
+        .stButton>button {
+            background-color: #1a73e8; /* Google Blue */
+            color: white; 
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 16px;
+            font-weight: bold;
+            transition: background-color 0.3s;
+        }
+        .stButton>button:hover { background-color: #1558b5; }
+    </style>
+    """, unsafe_allow_html=True)
 
-st.title("🤖 أداة استخلاص التقارير المالية الآلية (تخزين SQLite/تنزيل Excel)")
-st.caption("النسخة الحالية تستخلص البيانات المطلوبة بالكامل وتخزنها محلياً.")
+    st.title("📄 أداة استخلاص التقارير المالية الآلية (للعرض الفوري)")
+    st.caption("هذا التطبيق يستخلص البيانات من الملف المحمل مباشرة ويحولها إلى Excel دون تخزين.")
+    st.markdown("---")
 
-# Initialize DB connection and table
-db_conn = get_db_connection()
-if db_conn:
-    init_db(db_conn)
-else:
-    st.error("تعذر تهيئة قاعدة البيانات. لن يتم حفظ التقارير.")
-
-# File Upload Section
-uploaded_file = st.file_uploader("قم بتحميل ملف PDF أو صورة للتقرير المالي:", type=["pdf", "png", "jpg", "jpeg"])
-
-if uploaded_file is not None:
-    # Read file contents as bytes
-    file_bytes = uploaded_file.read()
-    file_name = uploaded_file.name
-    file_type = file_name.split('.')[-1].lower()
-    
-    st.markdown(f"**تم تحميل الملف:** `{file_name}`")
-    
-    # Run extraction and saving immediately
-    if st.button("بدء الاستخلاص والتحليل"):
-        with st.spinner("جاري تحليل وحفظ التقرير..."):
-            extract_financial_data(file_bytes, file_name, file_type)
-
-
-st.subheader("سجل التقارير الموحد والمحفوظ (SQLite)")
-
-# Display saved data
-reports_data = fetch_all_reports(db_conn)
-if reports_data:
-    df_reports = pd.DataFrame(reports_data)
-    
-    # Select columns for display and use Arabic headers
-    display_columns = ['file_name'] + REPORT_FIELDS
-    
-    # Prepare DataFrame for display with translated headers
-    df_display = df_reports[display_columns].rename(columns=REPORT_FIELD_MAP)
-    
-    # Display the table
-    st.dataframe(df_display, use_container_width=True)
-    
-    # Download Button (CSV/Excel)
-    csv_data = df_display.to_csv(index=False, encoding='utf-8-sig')
-    st.download_button(
-        label="📥 تنزيل جميع البيانات (ملف Excel - CSV)",
-        data=csv_data,
-        file_name='extracted_financial_reports.csv',
-        mime='text/csv'
+    # قسم تحميل الملف
+    uploaded_file = st.file_uploader(
+        "📂 قم بتحميل ملف التقرير المالي (PDF أو صورة) هنا:",
+        type=["pdf", "png", "jpg", "jpeg"],
+        accept_multiple_files=False
     )
-else:
-    st.info("لا توجد تقارير محفوظة حالياً في قاعدة بيانات SQLite.")
+
+    if uploaded_file is not None:
+        file_bytes = uploaded_file.read()
+        file_name = uploaded_file.name
+        file_type = file_name.split('.')[-1].lower()
+        
+        st.success(f"تم تحميل ملف: **{file_name}**")
+        
+        # زر التشغيل لفصل عملية التحميل عن عملية الاستخلاص الطويلة
+        if st.button("🚀 بدء الاستخلاص والتحويل إلى Excel", key="start_extraction"):
+            with st.spinner("⏳ جاري تحليل الوثيقة واستخلاص البيانات وتجهيز ملف Excel..."):
+                
+                extracted_data = extract_financial_data(file_bytes, file_name, file_type)
+                
+                if extracted_data:
+                    st.subheader("✅ البيانات المستخلصة (جاهزة للتنزيل)")
+                    
+                    # عرض البيانات المستخلصة كجدول (للتأكد)
+                    df_display = pd.DataFrame([extracted_data])
+                    # حذف اسم الملف ووقت الاستخلاص من العرض السريع (اختياري)
+                    if 'اسم الملف' in df_display.columns: del df_display['اسم الملف']
+                    if 'وقت الاستخلاص' in df_display.columns: del df_display['وقت الاستخلاص']
+                    st.dataframe(df_display, use_container_width=True, height=200)
+
+                    excel_data_bytes = create_final_report(extracted_data)
+                    
+                    if excel_data_bytes:
+                        st.subheader("🎉 ملف Excel جاهز للتحميل")
+                        st.balloons()
+                        
+                        st.download_button(
+                            label="⬇️ تحميل ملف التقرير النهائي (Excel XLSX)",
+                            data=excel_data_bytes,
+                            file_name=f"{file_name.replace('.pdf', '').replace(f'.{file_type}', '')}_Extracted_Report.xlsx",
+                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                        )
+                    else:
+                        st.error("❌ فشل في إنشاء ملف Excel. الرجاء مراجعة سجل الأخطاء.")
+                else:
+                    st.warning("لم يتم استخلاص أي بيانات. يرجى مراجعة رسائل الخطأ في الأعلى.")
+    
+if __name__ == '__main__':
+    main()
