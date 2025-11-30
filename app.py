@@ -106,10 +106,8 @@ if 'db' not in st.session_state:
             
         else:
             rtl_markdown("⚠️ فشل في إعداد Firebase (Config). سيتم استخدام **التخزين المؤقت** حتى يتم توفير إعدادات صحيحة.", "warning")
-            # لا يتم تعيين collection_path أو db هنا، وتبقى firebase_ready = False
     except Exception as e:
         rtl_markdown(f"❌ فشل في تهيئة Firebase بسبب خطأ غير متوقع: {e}. سيتم استخدام **التخزين المؤقت**.", "error")
-        # لا يتم تعيين collection_path أو db هنا، وتبقى firebase_ready = False
         
 # ----------------------------------------------------------------
 # 2. وظيفة الاستخلاص عبر Gemini (Multimodal)
@@ -123,9 +121,8 @@ def get_llm_multimodal_output(uploaded_file, client):
         rtl_markdown("🚨 لا يمكن التواصل مع Gemini. يرجى التحقق من توفير مفتاح API.", "error")
         return None
 
-    rtl_markdown("⏳ جاري قراءة الملف وإرساله مباشرة لـ Gemini لبدء الاستخلاص...", "info")
-
     try:
+        # 1. قراءة الملف
         uploaded_file.seek(0)
         file_bytes = uploaded_file.read()
         mime_type = uploaded_file.type 
@@ -135,8 +132,6 @@ def get_llm_multimodal_output(uploaded_file, client):
             return None
 
         file_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
-
-        rtl_markdown(f"✅ تم تجهيز الملف بنجاح ({uploaded_file.name})", "success")
 
         system_prompt = (
             "أنت محرك تحليل واستخلاص بيانات متميز ومتخصص في معالجة نصوص OCR العربية "
@@ -288,14 +283,26 @@ def add_report_to_storage(report_data):
         except Exception as e:
             rtl_markdown(f"❌ فشل في حفظ البيانات في Firestore: {e}. سيتم حفظها بشكل مؤقت.", "error")
             # في حال فشل الحفظ الدائم، ننتقل للحفظ المؤقت كنسخة احتياطية
-            st.session_state.report_data_temp.append(report_data)
+            if 'report_data_temp' not in st.session_state:
+                st.session_state.report_data_temp = []
+            
+            # حساب وإضافة الرقم التسلسلي (#) بناءً على عدد التقارير الحالي المؤقت
+            # (نحتاج إعادة حساب الـ # هنا في حال كان مؤقت)
+            new_report_data = report_data.copy()
+            new_report_data["#"] = len(st.session_state.report_data_temp) + 1
+            st.session_state.report_data_temp.append(new_report_data)
             return True # نعتبر العملية ناجحة لأنه تم حفظها في الجلسة
 
     # 2. الحفظ في الذاكرة المؤقتة (عند عدم توفر Firebase)
     else:
         if 'report_data_temp' not in st.session_state:
             st.session_state.report_data_temp = []
-        st.session_state.report_data_temp.append(report_data)
+        
+        # حساب وإضافة الرقم التسلسلي (#) بناءً على عدد التقارير الحالي المؤقت
+        new_report_data = report_data.copy()
+        new_report_data["#"] = len(st.session_state.report_data_temp) + 1
+        st.session_state.report_data_temp.append(new_report_data)
+        
         rtl_markdown("⚠️ تم الحفظ بنجاح في **الذاكرة المؤقتة للجلسة**. ستفقد البيانات عند تحديث الصفحة أو إغلاق المتصفح.", "warning")
         return True
         
@@ -369,9 +376,9 @@ def main():
     
     # 1. تحميل جميع البيانات الحالية (من Firestore أو الذاكرة المؤقتة)
     all_reports_data = get_all_reports_data()
+    reports_count = len(all_reports_data)
     
     # 2. عرض حالة التخزين
-    reports_count = len(all_reports_data)
     if st.session_state.get('firebase_ready'):
         rtl_markdown(f"💾 وضع التخزين: **دائم (Firebase Firestore)**. عدد البلاغات المخزنة: {reports_count} بلاغ.", "info")
     else:
@@ -427,42 +434,48 @@ def main():
     st.markdown("---") # فاصل قبل محمل الملف
 
 
-    # 4. محمل الملف ومنطق الاستخلاص
+    # 4. محمل الملف ومنطق الاستخلاص التلقائي
     uploaded_file = st.file_uploader(
-        fix_arabic("📂 قم بتحميل ملف التقرير المالي (PDF/Excel) هنا:"),
+        fix_arabic("📂 قم بتحميل ملف التقرير المالي (PDF/Excel) هنا لبدء الاستخلاص التلقائي:"),
         type=["pdf", "xlsx", "xls", "csv"],
         accept_multiple_files=False
     )
-
+    
+    # 5. منطق الاستخلاص الآلي (يتم تنفيذه مباشرة عند وجود ملف)
     if uploaded_file is not None:
-        rtl_markdown(f"تم تحميل ملف: {uploaded_file.name}", "success")
         
-        if st.button(fix_arabic("🚀 بدء الاستخلاص والإضافة للسجل الموحد"), key="start_extraction"):
+        if st.session_state.get('last_uploaded_filename') == uploaded_file.name and st.session_state.get('last_uploaded_size') == uploaded_file.size:
+             # تجنب إعادة المعالجة في حال لم يتغير الملف
+             rtl_markdown(f"تم تحميل الملف مسبقاً: {uploaded_file.name}. لعرضه في السجل يرجى مراجعة الجدول أعلاه.", "info")
+             # لا تنفذ الاستخلاص مرة أخرى
+        else:
+            # 5.1 حفظ معلومات الملف الجديد لتجنب التكرار
+            st.session_state.last_uploaded_filename = uploaded_file.name
+            st.session_state.last_uploaded_size = uploaded_file.size
+            
+            rtl_markdown(f"تم تحميل الملف: {uploaded_file.name}. **جاري بدء الاستخلاص التلقائي...**", "success")
             
             if not GEMINI_API_KEY:
                 rtl_markdown("🚨 يرجى لصق مفتاح Gemini API في الكود قبل بدء الاستخلاص.", "error")
                 return
 
+            # يتم استخدام سبينر (Spinner) لتوضيح أن العملية جارية
             with st.spinner(fix_arabic('⏳ جاري تحليل واستخلاص البيانات وتجهيز البلاغ... (قد يستغرق 30-60 ثانية)')):
                 
                 extracted_data = get_llm_multimodal_output(uploaded_file, client)
                 
                 if extracted_data:
                     
-                    # حساب وإضافة الرقم التسلسلي (#) بناءً على عدد التقارير الحالي
-                    reports_count_for_new_doc = len(all_reports_data) + 1
-                    extracted_data["#"] = reports_count_for_new_doc
-                    
-                    # 5. عرض البيانات المستخلصة للبلاغ الأخير
-                    st.markdown(f"<h3 style='text-align: right; direction: rtl; color: #059669;'>{fix_arabic(f'✅ البيانات المستخلصة للبلاغ رقم {extracted_data['#']} (تحقق سريع)')}</h3>", unsafe_allow_html=True)
-                    st.markdown("---")
-
-                    # 6. حفظ البيانات (في Firebase أو مؤقتاً)
+                    # 5.2 حفظ البيانات (في Firebase أو مؤقتاً)
                     is_saved = add_report_to_storage(extracted_data)
 
                     if is_saved:
                         
                         last_report = extracted_data
+                        
+                        # 5.3 عرض البيانات المستخلصة للبلاغ الأخير
+                        st.markdown(f"<h3 style='text-align: right; direction: rtl; color: #059669;'>{fix_arabic(f'✅ البيانات المستخلصة للبلاغ رقم {last_report['#']} (تحقق سريع)')}</h3>", unsafe_allow_html=True)
+                        st.markdown("---")
                         
                         for key, value in last_report.items():
                             display_key = fix_arabic(key)
@@ -477,10 +490,16 @@ def main():
                             st.markdown(html_line, unsafe_allow_html=True)
 
                         st.markdown("---")
-                        # إعادة تشغيل التطبيق لعرض الجدول المحدث بالبيانات الجديدة
+                        
+                        # 5.4 إعادة تشغيل التطبيق لعرض الجدول المحدث
                         st.rerun()
-                    # ملاحظة: رسالة فشل الحفظ الدائم تظهر داخل دالة add_report_to_storage
 
 
 if __name__ == '__main__':
+    # تهيئة مفاتيح التخزين المؤقت لملفات التحميل إذا لم تكن موجودة
+    if 'last_uploaded_filename' not in st.session_state:
+        st.session_state.last_uploaded_filename = None
+    if 'last_uploaded_size' not in st.session_state:
+        st.session_state.last_uploaded_size = None
+        
     main()
