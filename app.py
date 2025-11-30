@@ -12,7 +12,8 @@ from google.genai.errors import APIError
 
 # 🚨 هام: يجب تعيين مفتاح API الخاص بكِ هنا!
 # يرجى استبدال النص الفارغ التالي بمفتاح Gemini API الصالح
-GEMINI_API_KEY = "AIzaSyBVJvH_Z5AX9dwXR7UFhbeo9iB5-aL-rZI" 
+GEMINI_API_KEY = "AIzaSyBVJvH_Z5AX9dwXR7UFhbeo9iB5-aL-rZI" # ⬅️ الرجاء لصق المفتاح الصالح هنا بين علامتي التنصيص
+
 # تهيئة موديل Gemini
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
 SYSTEM_PROMPT = (
@@ -147,9 +148,17 @@ def create_final_report(extracted_data):
         col_format = workbook.add_format({'text_wrap': True, 'align': 'right', 'valign': 'top'})
         
         # العمود 'سبب الاشتباه' هو العمود رقم 21 (يُرمز له بـ U في Excel)
-        # نضبط عرضه على 100 لضمان ظهور النص الطويل بالكامل
-        worksheet.set_column('U:U', 100, col_format) 
+        # تم تعديل العرض إلى 120 لضمان احتواء النصوص الطويلة مع تفعيل الالتفاف التلقائي
+        worksheet.set_column('U:U', 120, col_format) 
         
+        # تطبيق التنسيق العام على باقي الأعمدة لضمان القراءة
+        for i, col_name in enumerate(final_cols):
+             # تجنب إعادة ضبط عمود "سبب الاشتباه"
+            if col_name != 'سبب الاشتباه':
+                # ضبط عرض افتراضي مناسب لباقي الحقول
+                width = 25 if col_name in ["اسم المشتبه به", "رقم صاحب العمل/ السجل التجاري"] else 18
+                worksheet.set_column(i, i, width, col_format)
+
         writer.close()
         output.seek(0)
         
