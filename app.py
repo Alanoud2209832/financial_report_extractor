@@ -107,7 +107,7 @@ def extract_financial_data(file_bytes, file_name, file_type):
         return extracted_data
 
     except APIError as e:
-        st.error(f"🚨 خطأ في الاتصال بـ Gemini API. تأكدي من صحة المفتاح. الخطأ: {e}")
+        st.error(f"🚨 خطأ في الاتصال بـ Gemini API. تأكد من صحة المفتاح. الخطأ: {e}")
     except json.JSONDecodeError:
         st.error(f"❌ فشل في تفسير استجابة النموذج كـ JSON. يرجى مراجعة الاستجابة.")
     except Exception as e:
@@ -193,18 +193,15 @@ def main():
     </style>
     """, unsafe_allow_html=True)
 
-    st.title("📄 أداة استخلاص التقارير المالية الآلية (للعرض الفوري)")
-    st.caption("هذا التطبيق يستخلص البيانات من الملف المحمل مباشرة ويحولها إلى Excel دون تخزين للبيانات.")
-    st.markdown("---")
     
     # ⚠️ فحص المفتاح
-    if GEMINI_API_KEY == "هنا يجب أن يكون مفتاحك" or not GEMINI_API_KEY:
-        st.error("🚨 الخطأ الأساسي: الرجاء لصق مفتاح Gemini API الصالح في متغير `GEMINI_API_KEY` داخل الكود.")
+    if GEMINI_API_KEY == "AIzaSyBVJvH_Z5AX9dwXR7UFhbeo9iB5-aL-rZI" or not GEMINI_API_KEY:
+        st.error("`GEMINI_API_KEY` داخل الكود.")
         return # إيقاف التنفيذ
 
     # قسم تحميل الملف
     uploaded_file = st.file_uploader(
-        "📂 قم بتحميل ملف التقرير المالي (PDF أو صورة) هنا:",
+        "قم بتحميل ملف التقرير",
         type=["pdf", "png", "jpg", "jpeg"],
         accept_multiple_files=False
     )
@@ -216,7 +213,7 @@ def main():
         
         st.success(f"تم تحميل ملف: **{file_name}**")
         
-        if st.button("🚀 بدء الاستخلاص والتحويل إلى Excel", key="start_extraction"):
+        if st.button("بدء الاستخلاص والتحويل إلى Excel", key="start_extraction"):
             
             extracted_data = extract_financial_data(file_bytes, file_name, file_type)
             
@@ -232,7 +229,7 @@ def main():
                 excel_data_bytes = create_final_report(extracted_data)
                 
                 if excel_data_bytes:
-                    st.subheader("🎉 ملف Excel جاهز للتحميل")
+                    st.subheader("ملف Excel جاهز للتحميل")
                     st.balloons()
                     
                     st.download_button(
