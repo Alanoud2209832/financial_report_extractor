@@ -3,7 +3,9 @@ import pandas as pd
 import json
 import io
 import time
-import sqlite3 # استيراد مكتبة SQLite المدمجة
+import sqlite3
+import fitz # استيراد مكتبة PyMuPDF للتعامل مع PDF
+from PIL import Image # مكتبة Pillow لمعالجة الصور
 from google import genai
 from google.genai.errors import APIError
 
@@ -13,12 +15,13 @@ from google.genai.errors import APIError
 
 # 🚨 هام: قم بتعيين مفتاح API الخاص بكِ هنا!
 # يرجى استبدال النص التالي بمفتاح Gemini API الصالح
-GEMINI_API_KEY = "AIzaSyBVJvH_Z5AX9dwXR7UFhbeo9iB5-aL-rZI"
+# ملاحظة: تم حذف المفتاح مرة أخرى للحفاظ على الخصوصية. يرجى لصقه مجدداً.
+GEMINI_API_KEY = "AIzaSyBVJvH_Z5AX9dwXR7UFhbeo9iB5-aL-rZI" # ⬅️ يرجى لصق المفتاح هنا
 
 # تهيئة موديل Gemini
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
 SYSTEM_PROMPT = (
-    "أنت خبير في تحليل التقارير المالية. مهمتك هي قراءة النص العربي المستخرج من وثيقة "
+    "أنت خبير في تحليل التقارير المالية. مهمتك هي قراءة النص والصورة المستخرجة من وثيقة "
     "مالية وتحويله إلى كائن JSON وفقًا للمخطط المحدد. يجب أن تكون دقيقًا جدًا في "
     "استخلاص القيم وأن تتأكد من مطابقتها لأسماء الحقول المطلوبة باللغة الإنجليزية."
 )
@@ -112,55 +115,99 @@ def insert_report(conn, data):
     return False
 
 # ----------------------------------------------------------------
-# 3. وظيفة استخلاص البيانات (Gemini API)
+# 3. وظيفة معالجة الملفات والاستخلاص
 # ----------------------------------------------------------------
 
-def extract_financial_data(file_bytes, file_name):
+def convert_pdf_to_images(file_bytes):
+    """تحويل ملف PDF (كـ bytes) إلى قائمة من صور PNG كـ bytes."""
+    
+    # ⚠️ ملاحظة: نحن نرسل الصفحة الأولى فقط لتجنب الزيادة الكبيرة في حجم الطلب والتكلفة.
+    try:
+        pdf_document = fitz.open(stream=file_bytes, filetype="pdf")
+        
+        # استهداف الصفحة الأولى فقط
+        page = pdf_document.load_page(0)
+        
+        # إنشاء مصفوفة بكسل عالية الدقة
+        # زوم 3.0 لتحسين وضوح النص
+        matrix = fitz.Matrix(3.0, 3.0)
+        
+        # إنشاء صورة PNG من الصفحة
+        pix = page.get_pixmap(matrix=matrix)
+        
+        # تحويل بيانات البكسل إلى بايتات قابلة للإرسال
+        img_bytes = pix.tobytes(output='png')
+        
+        return [img_bytes]
+    except Exception as e:
+        st.error(f"حدث خطأ أثناء تحويل PDF إلى صورة: {e}")
+        return []
+
+def extract_financial_data(file_bytes, file_name, file_type):
     """
     يتلقى بيانات الملف ويستخدم Gemini API لاستخلاص البيانات المالية
     وإدخالها مباشرة في قاعدة البيانات.
     """
-    if not GEMINI_API_KEY:
-        st.error("الرجاء إضافة مفتاح Gemini API في الكود.")
+    if GEMINI_API_KEY == "Your_API_Key_Here" or not GEMINI_API_KEY:
+        st.error("الرجاء تحديث 'GEMINI_API_KEY' في الكود بمفتاح صالح.")
         return False
         
     try:
-        # تهيئة العميل
         client = genai.Client(api_key=GEMINI_API_KEY)
         
-        # تحويل البايتات إلى جزء في الطلب (Part)
-        part = {
-            "inlineData": {
-                "data": file_bytes,
-                "mimeType": file_name.split('.')[-1] # تخمين نوع الملف من الامتداد
-            }
-        }
-
-        # بناء الاستعلام (Prompt)
-        prompt_text = (
+        # 1. تحديد المحتوى المتعدد الوسائط (Multimodal Content)
+        content_parts = [
             "قم باستخلاص جميع البيانات من هذه الوثيقة المالية "
             "وحوّلها إلى كائن JSON يطابق المخطط المحدد بدقة. "
             "إذا لم تتمكن من العثور على قيمة حقل معين، استخدم 'N/A'."
-        )
+        ]
+        
+        if file_type == 'pdf':
+            st.info("تم الكشف عن ملف PDF. جاري تحويل الصفحة الأولى إلى صورة...")
+            image_bytes_list = convert_pdf_to_images(file_bytes)
+            
+            if not image_bytes_list:
+                return False # فشل التحويل
+                
+            # إضافة الصورة (الـ bytes) إلى محتويات الطلب
+            for img_bytes in image_bytes_list:
+                content_parts.append({
+                    "inlineData": {
+                        "data": img_bytes,
+                        "mimeType": "image/png" # الآن أصبح نوع الملف صورة PNG
+                    }
+                })
+        
+        elif file_type in ['png', 'jpg', 'jpeg']:
+            # إضافة الصورة الأصلية مباشرة
+            content_parts.append({
+                "inlineData": {
+                    "data": file_bytes,
+                    "mimeType": f"image/{file_type}" 
+                }
+            })
+        else:
+            st.error(f"نوع الملف غير مدعوم: {file_type}")
+            return False
 
-        # إعدادات التوليد
+        # 2. إعدادات التوليد
         config = {
             "systemInstruction": SYSTEM_PROMPT,
             "responseMimeType": "application/json",
             "responseSchema": RESPONSE_SCHEMA,
-            "tools": [{"google_search": {}}] # تمكين Google Search للتحقق من السياق إن لزم
+            "tools": [{"google_search": {}}]
         }
 
-        # طلب توليد المحتوى
-        st.info(f"جاري استخلاص البيانات من '{file_name}'... قد يستغرق الأمر بعض الوقت.")
+        # 3. طلب توليد المحتوى
+        st.info(f"جاري استخلاص البيانات من '{file_name}'...")
         
         response = client.models.generate_content(
             model=MODEL_NAME,
-            contents=[prompt_text, part],
+            contents=content_parts,
             config=config,
         )
 
-        # استخراج النص الناتج وتفسيره كـ JSON
+        # 4. معالجة الاستجابة وحفظها في SQLite
         json_output = response.text
         extracted_data = json.loads(json_output)
         
@@ -168,7 +215,6 @@ def extract_financial_data(file_bytes, file_name):
         extracted_data['file_name'] = file_name
         extracted_data['extraction_timestamp'] = pd.Timestamp.now().isoformat()
 
-        # حفظ البيانات المستخلصة في قاعدة بيانات SQLite
         conn = get_db_connection()
         if conn and insert_report(conn, extracted_data):
             st.success(f"تم استخلاص وحفظ التقرير: '{file_name}' بنجاح!")
@@ -178,6 +224,7 @@ def extract_financial_data(file_bytes, file_name):
             return False
 
     except APIError as e:
+        # عرض الخطأ الذي تلقيناه من الـ API بوضوح
         st.error(f"خطأ في الاتصال بـ Gemini API. تأكدي من صحة المفتاح. الخطأ: {e}")
     except json.JSONDecodeError:
         st.error("فشل في تفسير استجابة النموذج كـ JSON. الرجاء المحاولة مرة أخرى.")
@@ -210,7 +257,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🤖 أداة استخلاص التقارير المالية الآلية (SQLite)")
-st.caption("يتم التخزين الآن في قاعدة بيانات SQLite دائمة.")
+st.caption("تم تحديث الكود الآن لدعم ملفات PDF عبر تحويلها إلى صور.")
 
 # تهيئة الاتصال بالقاعدة والتأكد من وجود الجدول
 db_conn = get_db_connection()
@@ -226,13 +273,14 @@ if uploaded_file is not None:
     # قراءة محتويات الملف كبايتات
     file_bytes = uploaded_file.read()
     file_name = uploaded_file.name
+    file_type = file_name.split('.')[-1].lower() # استخراج نوع الملف
     
     # رسالة لتبدأ عملية الاستخلاص مباشرة بعد التحميل
     st.markdown(f"**تم تحميل الملف:** `{file_name}`")
     
     # تشغيل وظيفة الاستخلاص والحفظ مباشرة
     with st.spinner("جاري تحليل وحفظ التقرير..."):
-        extract_financial_data(file_bytes, file_name)
+        extract_financial_data(file_bytes, file_name, file_type)
 
 
 st.subheader("سجل التقارير الموحد والمحفوظ (SQLite)")
@@ -242,7 +290,7 @@ reports_data = fetch_all_reports(db_conn)
 if reports_data:
     df_reports = pd.DataFrame(reports_data)
     
-    # إعادة ترتيب الأعمدة لعرضها
+    # استبعاد الأعمدة الخاصة بالقاعدة 'id' و 'extraction_timestamp'
     display_columns = ['file_name'] + REPORT_FIELDS
     
     # دالة بسيطة لترجمة رؤوس الأعمدة للعرض
