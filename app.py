@@ -2,24 +2,19 @@ import streamlit as st
 import pandas as pd
 import json
 import io
-import time
 import base64
-import os
-# تأكدنا من عدم استخدام SQLite أو Session State
-import fitz # PyMuPDF library for PDF processing
-from PIL import Image # Pillow library for image handling
 from google import genai
 from google.genai.errors import APIError
 
 # ----------------------------------------------------------------
-# 1. إعدادات API والثوابت والحقول المطلوبة
+# 1. إعدادات API والثوابت
 # ----------------------------------------------------------------
 
 # 🚨 هام: يجب تعيين مفتاح API الخاص بكِ هنا!
 # يرجى استبدال النص الفارغ التالي بمفتاح Gemini API الصالح
-GEMINI_API_KEY = "AIzaSyBVJvH_Z5AX9dwXR7UFhbeo9iB5-aL-rZI" # ⬅️ يرجى لصق المفتاح الصالح هنا بين علامات التنصيص
+GEMINI_API_KEY = "AIzaSyBVJvH_Z5AX9dwXR7UFhbeo9iB5-aL-rZI" 
 
-# تهيئة موديل Gemini (نستخدم flash للسرعة والأداء الممتاز في الاستخلاص)
+# تهيئة موديل Gemini
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
 SYSTEM_PROMPT = (
     "أنت خبير في تحليل التقارير المالية. مهمتك هي قراءة النص والصورة المستخرجة من وثيقة "
@@ -28,7 +23,7 @@ SYSTEM_PROMPT = (
     "استخدم القيمة 'غير متوفر' للحقول غير الموجودة."
 )
 
-# أسماء الحقول المطلوبة باللغة العربية (كما طلبتِ أن تكون في JSON و Excel)
+# أسماء الحقول المطلوبة باللغة العربية
 REPORT_FIELDS_ARABIC = [
     "رقم الصادر", "تاريخ الصادر", "اسم المشتبه به", "رقم الهوية",
     "الجنسية", "تاريخ الميلاد الوافد", "تاريخ الدخول", "الحالة الاجتماعية",
@@ -38,7 +33,7 @@ REPORT_FIELDS_ARABIC = [
     "إجمالي الإيداع على الحساب اثناء الدراسة"
 ]
 
-# مخطط الاستجابة لـ Gemini (JSON Schema) - يستخدم الحقول العربية مباشرة
+# مخطط الاستجابة لـ Gemini (JSON Schema)
 RESPONSE_SCHEMA = {
     "type": "OBJECT",
     "properties": {
@@ -51,95 +46,59 @@ RESPONSE_SCHEMA = {
 }
 
 # ----------------------------------------------------------------
-# 2. وظائف معالجة الملفات والاستخلاص (لا يوجد تخزين دائم)
+# 2. وظائف المعالجة
 # ----------------------------------------------------------------
-
-def convert_pdf_to_images(file_bytes):
-    """تحويل ملف PDF إلى قائمة من صور PNG (باستخدام الصفحة الأولى فقط)."""
-    try:
-        # Check if fitz (PyMuPDF) is available
-        if 'fitz' not in globals():
-             st.error("خطأ: مكتبة PyMuPDF (fitz) غير مثبتة. الرجاء تثبيتها باستخدام الأمر: pip3 install PyMuPDF")
-             return []
-             
-        pdf_document = fitz.open(stream=file_bytes, filetype="pdf")
-        page = pdf_document.load_page(0)
-        matrix = fitz.Matrix(3.0, 3.0) # دقة عالية لـ OCR أفضل
-        pix = page.get_pixmap(matrix=matrix)
-        img_bytes = pix.tobytes(output='png')
-        return [img_bytes]
-    except Exception as e:
-        st.error(f"حدث خطأ أثناء تحويل PDF إلى صورة: {e}. يرجى التأكد من تثبيت PyMuPDF.")
-        return []
 
 def extract_financial_data(file_bytes, file_name, file_type):
     """
-    يتلقى بيانات الملف ويستخدم Gemini API لاستخلاص البيانات المالية
-    وإرجاعها مباشرة كـ JSON.
+    تستخدم Gemini API لاستخلاص البيانات المالية مباشرة من بيانات الملف 
+    دون الحاجة لرفع الملف إلى File API أو استخدام مكتبة PyMuPDF (fitz).
     """
-    if not GEMINI_API_KEY:
-        st.error("🚨 الرجاء تحديث 'GEMINI_API_KEY' في الكود بمفتاح صالح قبل تحميل الملف.")
-        return None
-        
-    response = None
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
         
-        # 1. تحديد المحتوى المتعدد الوسائط
-        content_parts = [
-            "قم باستخلاص جميع البيانات من هذه الوثيقة المالية "
-            "وحوّلها إلى كائن JSON يطابق المخطط المحدد بدقة. "
-            "يرجى استخدام الحقول العربية المطلوبة كمفاتيح JSON. "
-            "إذا لم تتمكن من العثور على قيمة حقل معين، ضع القيمة: 'غير متوفر'."
-        ]
-        
+        # 1. تحديد نوع المحتوى
         if file_type == 'pdf':
-            st.info("تم الكشف عن ملف PDF. جاري تحويل الصفحة الأولى إلى صورة...")
-            image_bytes_list = convert_pdf_to_images(file_bytes)
-            
-            if not image_bytes_list:
-                return None
-                
-            for img_bytes in image_bytes_list:
-                content_parts.append({
-                    "inlineData": {
-                        "data": base64.b64encode(img_bytes).decode('utf-8'),
-                        "mimeType": "image/png"
-                    }
-                })
-        
+            mime_type = "application/pdf"
+            # تنبيه حول PDF يتم إرساله مباشرة دون معالجة مسبقة
+            st.warning("⚠️ جاري إرسال ملف PDF مباشرةً. قد يستغرق التحليل وقتاً أو يفشل في ملفات PDF المعقدة.")
         elif file_type in ['png', 'jpg', 'jpeg']:
-            content_parts.append({
-                "inlineData": {
-                    "data": base64.b64encode(file_bytes).decode('utf-8'),
-                    "mimeType": f"image/{file_type}" 
-                }
-            })
+            mime_type = f"image/{'jpeg' if file_type == 'jpg' else file_type}"
         else:
             st.error(f"نوع الملف غير مدعوم: {file_type}")
             return None
 
-        # 2. إعدادات التوليد
+        # 2. بناء محتوى الـ Inline Data (الملف نفسه كبيانات مشفرة)
+        content_parts = [
+            "قم باستخلاص جميع البيانات من هذه الوثيقة المالية "
+            "وحوّلها إلى كائن JSON يطابق المخطط المحدد بدقة. "
+            "يرجى استخدام الحقول العربية المطلوبة كمفاتيح JSON. "
+            "إذا لم تتمكن من العثور على قيمة حقل معين، ضع القيمة: 'غير متوفر'.",
+            {
+                "inlineData": {
+                    "data": base64.b64encode(file_bytes).decode('utf-8'),
+                    "mimeType": mime_type
+                }
+            }
+        ]
+
+        # 3. إعدادات التوليد
         config = {
             "systemInstruction": SYSTEM_PROMPT,
             "responseMimeType": "application/json",
             "responseSchema": RESPONSE_SCHEMA,
         }
 
-        # 3. طلب توليد المحتوى
-        st.info(f"⏳ جاري استخلاص البيانات من '{file_name}'...")
-        
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=content_parts,
-            config=config,
-        )
+        with st.spinner(f"⏳ جاري استخلاص البيانات من '{file_name}'..."):
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=content_parts,
+                config=config,
+            )
 
-        # 4. معالجة الاستجابة
         json_output = response.text
         extracted_data = json.loads(json_output)
         
-        # إضافة اسم الملف ووقت الاستخلاص (للمرجع في الجدول النهائي)
         extracted_data['اسم الملف'] = file_name
         extracted_data['وقت الاستخلاص'] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -156,17 +115,17 @@ def extract_financial_data(file_bytes, file_name, file_type):
 
 def create_final_report(extracted_data):
     """تحويل البيانات المستخلصة إلى ملف Excel (XLSX) بتنسيق RTL."""
+    # لا يحتاج هذا الجزء إلى أي مكتبات قاعدة بيانات
+    import xlsxwriter
+    
     if not extracted_data:
         return None
         
-    # تحديد ترتيب الأعمدة في ملف Excel النهائي
     column_order = ["#", "اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
     
-    # تحويل البيانات إلى إطار بيانات (DataFrame)
     df = pd.DataFrame([extracted_data])
     df.insert(0, '#', 1)
     
-    # إعادة ترتيب الأعمدة وإضافة الأعمدة الناقصة (لضمان وجود الـ 20 حقل)
     final_cols = []
     for col in column_order:
         if col in df.columns: 
@@ -180,7 +139,6 @@ def create_final_report(extracted_data):
     output = io.BytesIO()
     
     try:
-        # استخدام xlsxwriter لإنشاء ملف Excel ودعم RTL والتنسيق
         writer = pd.ExcelWriter(output, engine='xlsxwriter')
         df.to_excel(writer, sheet_name='التقرير المالي', index=False)
         
@@ -188,9 +146,7 @@ def create_final_report(extracted_data):
         worksheet = writer.sheets['التقرير المالي']
         worksheet.right_to_left()
 
-        # تنسيق العمود الخاص بـ "سبب الاشتباه" لضمان ظهور النص كاملاً
         col_format = workbook.add_format({'text_wrap': True, 'align': 'right', 'valign': 'top'})
-        # نفترض أن عمود "سبب الاشتباه" هو العمود رقم 17 (حسب الترتيب المحدد)
         worksheet.set_column('R:R', 60, col_format) 
         
         writer.close()
@@ -227,8 +183,13 @@ def main():
     """, unsafe_allow_html=True)
 
     st.title("📄 أداة استخلاص التقارير المالية الآلية (للعرض الفوري)")
-    st.caption("هذا التطبيق يستخلص البيانات من الملف المحمل مباشرة ويحولها إلى Excel دون تخزين.")
+    st.caption("هذا التطبيق يستخلص البيانات من الملف المحمل مباشرة ويحولها إلى Excel دون تخزين للبيانات.")
     st.markdown("---")
+    
+    # ⚠️ فحص المفتاح: إذا كانت الصفحة فارغة فهذا هو السبب الأرجح
+    if GEMINI_API_KEY == "هنا يجب أن يكون مفتاحك" or not GEMINI_API_KEY:
+        st.error("🚨 الخطأ الأساسي: الرجاء لصق مفتاح Gemini API الصالح في متغير `GEMINI_API_KEY` داخل الكود (السطر 18).")
+        return # إيقاف التنفيذ
 
     # قسم تحميل الملف
     uploaded_file = st.file_uploader(
@@ -244,38 +205,35 @@ def main():
         
         st.success(f"تم تحميل ملف: **{file_name}**")
         
-        # زر التشغيل لفصل عملية التحميل عن عملية الاستخلاص الطويلة
         if st.button("🚀 بدء الاستخلاص والتحويل إلى Excel", key="start_extraction"):
-            with st.spinner("⏳ جاري تحليل الوثيقة واستخلاص البيانات وتجهيز ملف Excel..."):
+            
+            extracted_data = extract_financial_data(file_bytes, file_name, file_type)
+            
+            if extracted_data:
+                st.subheader("✅ البيانات المستخلصة (جاهزة للتنزيل)")
                 
-                extracted_data = extract_financial_data(file_bytes, file_name, file_type)
-                
-                if extracted_data:
-                    st.subheader("✅ البيانات المستخلصة (جاهزة للتنزيل)")
-                    
-                    # عرض البيانات المستخلصة كجدول (للتأكد)
-                    df_display = pd.DataFrame([extracted_data])
-                    # حذف اسم الملف ووقت الاستخلاص من العرض السريع (اختياري)
-                    if 'اسم الملف' in df_display.columns: del df_display['اسم الملف']
-                    if 'وقت الاستخلاص' in df_display.columns: del df_display['وقت الاستخلاص']
-                    st.dataframe(df_display, use_container_width=True, height=200)
+                df_display = pd.DataFrame([extracted_data])
+                # إزالة أعمدة الميتا داتا من العرض الجدولي (لكن تبقى في Excel)
+                if 'اسم الملف' in df_display.columns: del df_display['اسم الملف']
+                if 'وقت الاستخلاص' in df_display.columns: del df_display['وقت الاستخلاص']
+                st.dataframe(df_display, use_container_width=True, height=200)
 
-                    excel_data_bytes = create_final_report(extracted_data)
+                excel_data_bytes = create_final_report(extracted_data)
+                
+                if excel_data_bytes:
+                    st.subheader("🎉 ملف Excel جاهز للتحميل")
+                    st.balloons()
                     
-                    if excel_data_bytes:
-                        st.subheader("🎉 ملف Excel جاهز للتحميل")
-                        st.balloons()
-                        
-                        st.download_button(
-                            label="⬇️ تحميل ملف التقرير النهائي (Excel XLSX)",
-                            data=excel_data_bytes,
-                            file_name=f"{file_name.replace('.pdf', '').replace(f'.{file_type}', '')}_Extracted_Report.xlsx",
-                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                        )
-                    else:
-                        st.error("❌ فشل في إنشاء ملف Excel. الرجاء مراجعة سجل الأخطاء.")
+                    st.download_button(
+                        label="⬇️ تحميل ملف التقرير النهائي (Excel XLSX)",
+                        data=excel_data_bytes,
+                        file_name=f"{file_name.replace('.pdf', '').replace(f'.{file_type}', '')}_Extracted_Report.xlsx",
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    )
                 else:
-                    st.warning("لم يتم استخلاص أي بيانات. يرجى مراجعة رسائل الخطأ في الأعلى.")
+                    st.error("❌ فشل في إنشاء ملف Excel.")
+            else:
+                st.warning("لم يتم استخلاص أي بيانات. يرجى مراجعة رسائل الخطأ.")
     
 if __name__ == '__main__':
     main()
