@@ -13,23 +13,56 @@ from bidi.algorithm import get_display
 GEMINI_API_KEY = "AIzaSyCeNFMTQjPhKMk0hN5qA_Lk-256RpExmN0" # ⬅️ الصقي المفتاح الجديد هنا
 
 # ----------------------------------------------------------------------
-# 2. إعداد الاتصال بقاعدة بيانات Firestore
+# 2. إعداد الاتصال بقاعدة بيانات Firestore (الطريقة الآمنة)
 # ----------------------------------------------------------------------
 
-# التحقق من التهيئة وتجنب الخطأ إذا تم التهيئة مسبقاً
-if not firebase_admin._apps:
+# 🚨 تحذير أمني: تم إزالة مفتاح الخدمة الخاص بك من الكود (الكائن FIRESTORE_CREDENTIALS) 
+# يجب الآن الاعتماد على ملف .streamlit/secrets.toml أو متغيرات البيئة لضمان الأمان.
+
+# هذه الدالة تحاول جلب بيانات الاعتماد بأمان
+def get_firestore_credentials():
     try:
-        # Streamlit يقرأ البيانات من ملف .streamlit/secrets.toml
-        # يجب أن يكون مفتاح 'firestore' هو نفس اسم الجدول في secrets.toml
-        cred = credentials.Certificate(st.secrets["firestore"])
-        firebase_admin.initialize_app(cred)
-        st.session_state['db'] = firestore.client()
-        st.success("تم الاتصال بـ Firestore بنجاح!")
+        # القراءة من st.secrets (سواء من ملف secrets.toml محلياً أو متغيرات بيئة Streamlit Cloud)
+        secret_dict = st.secrets["firestore"]
+
+        # معالجة المفتاح الخاص المتعدد الأسطر (Private Key)
+        # إذا تم تمريره كنص واحد مع ترميز \n (كما يحدث غالباً عند استخدام secrets.toml/متغيرات البيئة)
+        if isinstance(secret_dict, dict) and "private_key" in secret_dict:
+            secret_dict["private_key"] = secret_dict["private_key"].replace('\\n', '\n')
+
+        return secret_dict
+        
+    except KeyError:
+        # إذا لم يتم العثور على المفتاح، نرسل خطأ واضح للمستخدم
+        st.error("❌ خطأ: لم يتم العثور على أسرار Firestore في st.secrets. "
+                 "يرجى التأكد من إنشاء ملف `.streamlit/secrets.toml` يحتوي على المفتاح.")
+        return None
     except Exception as e:
-        st.error(f"خطأ في الاتصال بـ Firestore. تأكد من وجود الملف .streamlit/secrets.toml بالصيغة الصحيحة. الخطأ: {e}")
-        st.session_state['db'] = None
+        st.error(f"❌ خطأ غير متوقع أثناء قراءة أسرار Firestore: {e}")
+        return None
+
+# محاولة الحصول على بيانات الاعتماد
+firestore_creds = get_firestore_credentials()
+db_client = None
+
+if firestore_creds:
+    # التحقق من التهيئة وتجنب الخطأ إذا تم التهيئة مسبقاً
+    if not firebase_admin._apps:
+        try:
+            cred = credentials.Certificate(firestore_creds) 
+            firebase_admin.initialize_app(cred)
+            db_client = firestore.client()
+            st.session_state['db'] = db_client
+            st.success("🎉 تم الاتصال بـ Firestore بنجاح!")
+        except Exception as e:
+            st.error(f"❌ خطأ في الاتصال بـ Firestore. يرجى مراجعة مفتاح الخدمة في `secrets.toml`. الخطأ: {e}")
+            st.session_state['db'] = None
+    else:
+        db_client = firestore.client()
+        st.session_state['db'] = db_client
 else:
-    st.session_state['db'] = firestore.client()
+    st.session_state['db'] = None
+
 
 # ----------------------------------------------------------------------
 # 3. الدوال المساعدة للغة العربية
@@ -90,7 +123,7 @@ if uploaded_file is not None:
             try:
                 db = st.session_state['db']
                 # نحدد المسار الذي ستُحفظ فيه البيانات في Firestore
-                # المسار المتبع: artifacts/{app_id}/reports/{file_name}
+                # المسار المتبع: artifacts/{project_id}/reports/{file_name}
                 reports_collection = db.collection("artifacts").document("project-6a5a2").collection("reports")
                 
                 # إضافة البيانات كـ مستند جديد
@@ -103,7 +136,7 @@ if uploaded_file is not None:
 
             except Exception as e:
                 st.error(fix_arabic(f"فشل حفظ البيانات: {e}"))
-                st.warning(fix_arabic("تأكد من أنك قمت بإنشاء ملف '.streamlit/secrets.toml' بشكل صحيح."))
+                st.warning(fix_arabic("فشل الحفظ. قد تكون المشكلة في أذونات الكتابة في Firestore."))
 
 
 # ----------------------------------------------------------------------
