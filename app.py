@@ -195,7 +195,7 @@ def main():
 
     
     # ⚠️ فحص المفتاح
-    if GEMINI_API_KEY == "AIzaSyBVJvH_Z5AX9dwXR7UFhbeo9iB5-aL-rZI" or not GEMINI_API_KEY:
+    if GEMINI_API_KEY == "" or not GEMINI_API_KEY:
         st.error("`GEMINI_API_KEY` داخل الكود.")
         return # إيقاف التنفيذ
 
