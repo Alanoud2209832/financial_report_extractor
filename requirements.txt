@@ -1,3 +1,9 @@
+streamlit==1.26.0
+pandas==2.1.0
+openpyxl==3.1.2
+xlsxwriter==3.1.5
+psycopg2-binary==2.9.9
+google-genai==0.4.0
 streamlit
 pandas
 google-genai
