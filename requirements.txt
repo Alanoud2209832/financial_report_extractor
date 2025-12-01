@@ -5,3 +5,4 @@ arabic-reshaper
 python-bidi
 firebase-admin
 xlsxwriter
+psycopg2-binary
