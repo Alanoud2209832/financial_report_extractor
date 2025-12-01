@@ -6,3 +6,8 @@ python-bidi
 firebase-admin
 xlsxwriter
 psycopg2-binary
+psycopg2-binary
+python-dotenv
+
+
+
