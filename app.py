@@ -5,13 +5,16 @@ import io
 import base64
 from google import genai
 from google.genai.errors import APIError
-from db import save_to_db
+from db import save_to_db  # دالة الحفظ في Neon
 
 # ----------------------------------------------------------------
 # 1. إعدادات API والثوابت
 # ----------------------------------------------------------------
 
-GEMINI_API_KEY = "AIzaSyA06G-4CqtJtXqJoAdCXMDGtjaoh3DA-qI"  # استبدلي بالمفتاح الصالح
+# 🚨 هام: يجب تعيين مفتاح API الخاص بكِ هنا!
+GEMINI_API_KEY = "AIzaSyA06G-4CqtJtXqJoAdCXMDGtjaoh3DA-qI"
+
+# تهيئة موديل Gemini
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
 SYSTEM_PROMPT = (
     "أنت نظام استخلاص بيانات آلي (OCR/NLP). مهمتك هي قراءة النص والصورة المستخرجة من الوثيقة المالية "
@@ -20,6 +23,7 @@ SYSTEM_PROMPT = (
     "قم بتصحيح أي انعكاس أو تشويش في النص العربي قبل الاستخلاص. استخدم القيمة 'غير متوفر' للحقول غير الموجودة."
 )
 
+# أسماء الحقول المطلوبة باللغة العربية
 REPORT_FIELDS_ARABIC = [
     "رقم الصادر", "تاريخ الصادر", "اسم المشتبه به", "رقم الهوية",
     "الجنسية", "تاريخ الميلاد الوافد", "تاريخ الدخول", "الحالة الاجتماعية",
@@ -29,9 +33,13 @@ REPORT_FIELDS_ARABIC = [
     "إجمالي الإيداع على الحساب اثناء الدراسة"
 ]
 
+# مخطط الاستجابة لـ Gemini (JSON Schema)
 RESPONSE_SCHEMA = {
     "type": "OBJECT",
-    "properties": {field: {"type": "STRING", "description": f"القيمة المستخلصة لـ: {field}"} for field in REPORT_FIELDS_ARABIC},
+    "properties": {
+        field: {"type": "STRING", "description": f"القيمة المستخلصة لـ: {field}"}
+        for field in REPORT_FIELDS_ARABIC
+    },
     "propertyOrdering": REPORT_FIELDS_ARABIC
 }
 
@@ -40,24 +48,33 @@ RESPONSE_SCHEMA = {
 # ----------------------------------------------------------------
 
 def extract_financial_data(file_bytes, file_name, file_type):
-    """تستخدم Gemini API لاستخلاص البيانات المالية مباشرة من بيانات الملف."""
+    """
+    تستخدم Gemini API لاستخلاص البيانات المالية مباشرة من بيانات الملف.
+    """
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
+
+        # تحديد نوع المحتوى
         if file_type == 'pdf':
             mime_type = "application/pdf"
-            st.warning("⚠️ جاري إرسال ملف PDF مباشرةً. قد يستغرق التحليل وقتاً أو يفشل في ملفات PDF المعقدة.")
+            st.warning("⚠️ جاري إرسال ملف PDF مباشرةً. قد يستغرق التحليل وقتاً.")
         elif file_type in ['png', 'jpg', 'jpeg']:
             mime_type = f"image/{'jpeg' if file_type == 'jpg' else file_type}"
         else:
             st.error(f"نوع الملف غير مدعوم: {file_type}")
             return None
 
+        # بناء محتوى الـ Inline Data
         content_parts = [
             "قم باستخلاص جميع البيانات من هذه الوثيقة المالية "
             "وحوّلها إلى كائن JSON يطابق المخطط المحدد بدقة. "
-            "يرجى استخدام الحقول العربية المطلوبة كمفاتيح JSON. "
             "إذا لم تتمكن من العثور على قيمة حقل معين، ضع القيمة: 'غير متوفر'.",
-            {"inlineData": {"data": base64.b64encode(file_bytes).decode('utf-8'), "mimeType": mime_type}}
+            {
+                "inlineData": {
+                    "data": base64.b64encode(file_bytes).decode('utf-8'),
+                    "mimeType": mime_type
+                }
+            }
         ]
 
         config = {
@@ -67,13 +84,19 @@ def extract_financial_data(file_bytes, file_name, file_type):
         }
 
         with st.spinner(f"⏳ جاري استخلاص البيانات من '{file_name}'..."):
-            response = client.models.generate_content(model=MODEL_NAME, contents=content_parts, config=config)
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=content_parts,
+                config=config,
+            )
 
-        extracted_data = json.loads(response.text)
+        json_output = response.text
+        extracted_data = json.loads(json_output)
+
         extracted_data['اسم الملف'] = file_name
         extracted_data['وقت الاستخلاص'] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-        st.success(f"✅ تم استخلاص البيانات من التقرير: '{file_name}' بنجاح!")
 
+        st.success(f"✅ تم استخلاص البيانات من التقرير: '{file_name}' بنجاح!")
         return extracted_data
 
     except APIError as e:
@@ -93,18 +116,25 @@ def create_final_report(extracted_data):
     column_order = ["#", "اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
     df = pd.DataFrame([extracted_data])
     df.insert(0, '#', 1)
-    final_cols = [col if col in df.columns else 'غير متوفر' for col in column_order]
+
+    # تأكد من وجود كل الأعمدة
+    final_cols = []
+    for col in column_order:
+        if col not in df.columns:
+            df[col] = 'غير متوفر'
+        final_cols.append(col)
     df = df[final_cols]
 
     output = io.BytesIO()
     try:
         writer = pd.ExcelWriter(output, engine='xlsxwriter')
         df.to_excel(writer, sheet_name='التقرير المالي', index=False)
-        workbook = writer.book
+        workbook  = writer.book
         worksheet = writer.sheets['التقرير المالي']
         worksheet.right_to_left()
+
         col_format = workbook.add_format({'text_wrap': True, 'align': 'right', 'valign': 'top'})
-        worksheet.set_column('U:U', 120, col_format)
+        worksheet.set_column('U:U', 120, col_format)  # عمود سبب الاشتباه
 
         for i, col_name in enumerate(final_cols):
             if col_name != 'سبب الاشتباه':
@@ -119,7 +149,7 @@ def create_final_report(extracted_data):
         return None
 
 # ----------------------------------------------------------------
-# 3. واجهة المستخدم
+# 3. واجهة المستخدم (Streamlit UI)
 # ----------------------------------------------------------------
 
 def main():
@@ -129,61 +159,63 @@ def main():
     <style>
         .stApp { background-color: #f0f2f6; }
         .stButton>button {
-            background-color: #1a73e8;
-            color: white; 
-            border-radius: 8px;
-            padding: 10px 20px;
-            font-size: 16px;
-            font-weight: bold;
-            transition: background-color 0.3s;
+            background-color: #1a73e8; color: white; border-radius: 8px;
+            padding: 10px 20px; font-size: 16px; font-weight: bold; transition: background-color 0.3s;
         }
         .stButton>button:hover { background-color: #1558b5; }
     </style>
     """, unsafe_allow_html=True)
 
-    if not GEMINI_API_KEY:
-        st.error("❌ يجب إدخال GEMINI_API_KEY داخل الكود.")
+    if GEMINI_API_KEY == "":
+        st.error("❌ يجب وضع GEMINI_API_KEY صالح.")
         return
 
-    uploaded_file = st.file_uploader("قم بتحميل ملف التقرير", type=["pdf", "png", "jpg", "jpeg"])
-    if uploaded_file is None:
-        st.info("يرجى تحميل تقرير مالي لبدء التحليل.")
-        return
+    uploaded_file = st.file_uploader(
+        "قم بتحميل ملف التقرير",
+        type=["pdf", "png", "jpg", "jpeg"],
+        accept_multiple_files=False
+    )
 
-    file_bytes = uploaded_file.read()
-    file_name = uploaded_file.name
-    file_type = file_name.split('.')[-1].lower()
-    st.success(f"تم تحميل ملف: **{file_name}**")
+    if uploaded_file is not None:
+        file_bytes = uploaded_file.read()
+        file_name = uploaded_file.name
+        file_type = file_name.split('.')[-1].lower()
 
-    if st.button("بدء الاستخلاص والتحويل إلى Excel", key="start_extraction"):
-        extracted_data = extract_financial_data(file_bytes, file_name, file_type)
+        st.success(f"تم تحميل ملف: **{file_name}**")
 
-        if not extracted_data:
-            st.warning("لم يتم استخلاص أي بيانات.")
-            return
+        if st.button("بدء الاستخلاص والتحويل إلى Excel", key="start_extraction"):
+            extracted_data = extract_financial_data(file_bytes, file_name, file_type)
 
-        st.subheader("✅ البيانات المستخلصة (جاهزة للتنزيل والحفظ)")
-        df_display = pd.DataFrame([extracted_data])
-        if 'اسم الملف' in df_display.columns: del df_display['اسم الملف']
-        if 'وقت الاستخلاص' in df_display.columns: del df_display['وقت الاستخلاص']
-        st.dataframe(df_display, use_container_width=True, height=200)
+            if extracted_data:
+                st.subheader("✅ البيانات المستخلصة (جاهزة للتنزيل والحفظ)")
 
-        # حفظ تلقائي في Neon
-        if save_to_db(extracted_data):
-            st.success("💾 تم حفظ البيانات تلقائيًا في قاعدة Neon!")
-        else:
-            st.error("❌ فشل في حفظ البيانات في Neon.")
+                # عرض بيانات الجدول
+                df_display = pd.DataFrame([extracted_data])
+                if 'اسم الملف' in df_display.columns: del df_display['اسم الملف']
+                if 'وقت الاستخلاص' in df_display.columns: del df_display['وقت الاستخلاص']
+                st.dataframe(df_display, use_container_width=True, height=200)
 
-        # إنشاء ملف Excel للتنزيل
-        excel_data_bytes = create_final_report(extracted_data)
-        if excel_data_bytes:
-            st.subheader("ملف Excel جاهز للتحميل")
-            st.download_button(
-                label="⬇️ تحميل ملف التقرير النهائي (Excel XLSX)",
-                data=excel_data_bytes,
-                file_name=f"{file_name.replace('.pdf', '').replace(f'.{file_type}', '')}_Extracted_Report.xlsx",
-                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            )
+                # حفظ البيانات في Neon
+                if st.button("💾 حفظ البيانات في قاعدة البيانات"):
+                    success = save_to_db(extracted_data)
+                    if success:
+                        st.success("✅ تم حفظ البيانات بنجاح في Neon!")
+                    else:
+                        st.error("❌ فشل في حفظ البيانات في Neon.")
+
+                # إنشاء Excel
+                excel_data_bytes = create_final_report(extracted_data)
+                if excel_data_bytes:
+                    st.subheader("ملف Excel جاهز للتحميل")
+                    st.balloons()
+                    st.download_button(
+                        label="⬇️ تحميل ملف التقرير النهائي (Excel XLSX)",
+                        data=excel_data_bytes,
+                        file_name=f"{file_name.replace('.pdf', '').replace(f'.{file_type}', '')}_Extracted_Report.xlsx",
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    )
+                else:
+                    st.error("❌ فشل في إنشاء ملف Excel.")
 
 if __name__ == '__main__':
     main()
