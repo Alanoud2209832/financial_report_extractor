@@ -5,8 +5,6 @@ import streamlit as st
 # ===============================
 # 1. إعدادات الاتصال بـ Neon
 # ===============================
-
-# استخدم الـ connection string المباشر
 CONNECTION_STRING = "postgresql://neondb_owner:npg_xemW42zBHjwi@ep-broad-waterfall-adekol3k-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 
 def connect_db():
@@ -21,7 +19,6 @@ def connect_db():
 # ===============================
 # 2. دالة حفظ البيانات
 # ===============================
-
 def save_to_db(extracted_data):
     """
     حفظ بيانات التقرير المالي في جدول suspects.
@@ -60,7 +57,6 @@ def save_to_db(extracted_data):
             "وقت_الاستخلاص": extracted_data.get("وقت الاستخلاص", "غير متوفر")
         }
 
-        # استعلام الإدراج
         insert_query = """
             INSERT INTO suspects (
                 رقم_الصادر, تاريخ_الصادر, اسم_المشتبه_به, رقم_الهوية,
