@@ -5,6 +5,17 @@ from firebase_admin import credentials, firestore
 from google import genai
 from arabic_reshaper import reshape
 from bidi.algorithm import get_display
+from db import connect_db
+
+conn = connect_db()
+
+if conn:
+    cur = conn.cursor()
+    cur.execute("SELECT NOW();")   # اختبار الاتصال فقط
+    print("Database Time:", cur.fetchone())
+
+    cur.close()
+    conn.close()
 
 # ----------------------------------------------------------------------
 # 1. إعداد مفتاح Gemini API (مطلوب: استخدمي المفتاح الجديد)
