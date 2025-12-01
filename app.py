@@ -12,7 +12,7 @@ from google.genai.errors import APIError
 
 # 🚨 هام: يجب تعيين مفتاح API الخاص بكِ هنا!
 # يرجى استبدال النص الفارغ التالي بمفتاح Gemini API الصالح
-GEMINI_API_KEY = "AIzaSyCeNFMTQjPhKMk0hN5qA_Lk-256RpExmN0" # ⬅️ الرجاء لصق المفتاح الصالح هنا بين علامتي التنصيص
+GEMINI_API_KEY = "AIzaSyA06G-4CqtJtXqJoAdCXMDGtjaoh3DA-qI" # ⬅️ الرجاء لصق المفتاح الصالح هنا بين علامتي التنصيص
 
 # تهيئة موديل Gemini
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
