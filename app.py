@@ -11,7 +11,7 @@ from db import save_to_db
 # ===============================
 # 1. إعدادات API
 # ===============================
-GEMINI_API_KEY = "AIzaSyA06G-4CqtJtXqJoAdCXMDGtjaoh3DA-qI"
+GEMINI_API_KEY = "AIzaSyCGFercBzm5rPHcsUoqW5quazapC8r8JU0"
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
 SYSTEM_PROMPT = (
     " أنت نظام استخلاص بيانات آلي (OCR/NLP)التعديل هنا: التركيز على الاستخلاص الحرفي والنسخ الدقيق للبيانات، خاصة في الحقول النصية الطويلة."
