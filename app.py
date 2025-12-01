@@ -54,7 +54,7 @@ def extract_financial_data(file_bytes, file_name, file_type):
             "responseSchema": RESPONSE_SCHEMA
         }
 
-        with st.spinner(f"⏳ جاري استخلاص البيانات من '{file_name}'..."):
+        with st.spinner(f"⏳ جاري الاستخلاص من '{file_name}'..."):
             response = client.models.generate_content(model=MODEL_NAME, contents=content_parts, config=config)
 
         extracted_data = json.loads(response.text)
@@ -67,13 +67,16 @@ def extract_financial_data(file_bytes, file_name, file_type):
         st.error(f"❌ خطأ أثناء الاستخلاص: {e}")
         return None
 
-def create_final_report(extracted_data):
+def create_final_report_multiple(all_data):
     import xlsxwriter
-    if not extracted_data: return None
+    if not all_data: return None
 
-    df = pd.DataFrame([extracted_data])
-    df.insert(0, '#', 1)
+    df_list = []
+    for i, data in enumerate(all_data, 1):
+        data['#'] = i
+        df_list.append(data)
 
+    df = pd.DataFrame(df_list)
     column_order = ["#", "اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
     for col in column_order:
         if col not in df.columns: df[col] = 'غير متوفر'
@@ -87,7 +90,9 @@ def create_final_report(extracted_data):
     col_format = workbook.add_format({'text_wrap': True, 'align': 'right', 'valign': 'top'})
     worksheet.set_column('U:U', 120, col_format)
     for i, col_name in enumerate(column_order):
-        if col_name != 'سبب الاشتباه': width = 25 if col_name in ["اسم المشتبه به","رقم صاحب العمل/ السجل التجاري"] else 18; worksheet.set_column(i,i,width,col_format)
+        if col_name != 'سبب الاشتباه':
+            width = 25 if col_name in ["اسم المشتبه به","رقم صاحب العمل/ السجل التجاري"] else 18
+            worksheet.set_column(i,i,width,col_format)
     writer.close()
     output.seek(0)
     return output.read()
@@ -97,32 +102,40 @@ def create_final_report(extracted_data):
 # ===============================
 def main():
     st.set_page_config(layout="wide", page_title="أداة استخلاص وتقارير مالية")
-    uploaded_file = st.file_uploader("قم بتحميل ملف التقرير", type=["pdf","png","jpg","jpeg"])
-    if uploaded_file:
-        file_bytes, file_name = uploaded_file.read(), uploaded_file.name
-        file_type = file_name.split('.')[-1].lower()
-        st.success(f"تم تحميل ملف: **{file_name}**")
+
+    uploaded_files = st.file_uploader(
+        "قم بتحميل الملفات (يمكنك اختيار أكثر من ملف)",
+        type=["pdf","png","jpg","jpeg"],
+        accept_multiple_files=True
+    )
+
+    if uploaded_files:
+        all_extracted_data = []
 
         if st.button("بدء الاستخلاص والتحويل إلى Excel"):
-            extracted_data = extract_financial_data(file_bytes, file_name, file_type)
-            if extracted_data:
-                st.subheader("✅ البيانات المستخلصة")
-                df_display = pd.DataFrame([extracted_data])
+            for uploaded_file in uploaded_files:
+                file_bytes, file_name = uploaded_file.read(), uploaded_file.name
+                file_type = file_name.split('.')[-1].lower()
+                st.success(f"تم تحميل ملف: **{file_name}**")
+                data = extract_financial_data(file_bytes, file_name, file_type)
+                if data:
+                    all_extracted_data.append(data)
+                    # حفظ كل ملف في Neon إذا أردت
+                    save_to_db(data)
+
+            if all_extracted_data:
+                st.subheader("✅ جميع البيانات المستخلصة")
+                df_display = pd.DataFrame(all_extracted_data)
                 st.dataframe(df_display, use_container_width=True, height=200)
 
-                excel_data_bytes = create_final_report(extracted_data)
+                excel_data_bytes = create_final_report_multiple(all_extracted_data)
                 if excel_data_bytes:
                     st.download_button(
-                        "⬇️ تحميل ملف Excel",
+                        "⬇️ تحميل ملف Excel النهائي",
                         data=excel_data_bytes,
-                        file_name=f"{file_name.replace(f'.{file_type}','')}_Extracted_Report.xlsx",
+                        file_name="All_Files_Extracted_Report.xlsx",
                         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                     )
-
-                # زر الحفظ في Neon
-                if st.button("💾 حفظ البيانات في قاعدة Neon"):
-                    success = save_to_db(extracted_data)
-                    if success: st.success("✅ تم حفظ البيانات بنجاح في Neon!")
 
 if __name__ == '__main__':
     main()
