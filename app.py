@@ -111,9 +111,10 @@ def segment_document_by_cases(file_bytes, file_name):
                     time.sleep(wait_time)
                 else:
                     st.error(f"❌ فشل التقسيم بعد {MAX_RETRIES} محاولات: {e}")
-                    break # الخروج من حلقة المحاولات
-
-        # إذا فشلت جميع المحاولات أو لم يتم العثور على تقسيم، العودة للمسار القديم (قضية واحدة)
+                    # إذا فشلت جميع المحاولات، نعود للمسار القديم (قضية واحدة)
+                    return [file_bytes] 
+        
+        # إذا لم يتم الخروج من الحلقة بـ return، نعود للمسار القديم
         st.warning(f"⚠️ فشل التقسيم التلقائي. سيتم التعامل مع الملف بالكامل كقضية واحدة.")
         return [file_bytes] 
             
@@ -205,19 +206,24 @@ def create_final_report_multiple(all_data):
     df = df.reindex(columns=column_order, fill_value='غير متوفر')
 
     output = io.BytesIO()
-    writer = pd.ExcelWriter(output, engine='xlsxwriter')
-    df.to_excel(writer, sheet_name='التقرير المالي', index=False)
-    workbook, worksheet = writer.book, writer.sheets['التقرير المالي']
-    worksheet.right_to_left()
-    # تنسيق العمود الأخير (سبب الاشتباه) ليكون أوسع ويحتوي على النص كاملاً
-    col_format = workbook.add_format({'text_wrap': True, 'align': 'right', 'valign': 'top'})
-    worksheet.set_column(column_order.index('سبب الاشتباه'), column_order.index('سبب الاشتباه'), 120, col_format)
-    # تنسيق الأعمدة الأخرى
-    for i, col_name in enumerate(column_order):
-        if col_name != 'سبب الاشتباه':
-            width = 25 if col_name in ["اسم المشتبه به","رقم صاحب العمل/ السجل التجاري"] else 18
-            worksheet.set_column(i,i,width,col_format)
-    writer.close()
+    # استخدام with للتعامل مع Writer بشكل آمن
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name='التقرير المالي', index=False)
+        workbook, worksheet = writer.book, writer.sheets['التقرير المالي']
+        worksheet.right_to_left()
+        
+        # تنسيق العمود الأخير (سبب الاشتباه) ليكون أوسع ويحتوي على النص كاملاً
+        col_format = workbook.add_format({'text_wrap': True, 'align': 'right', 'valign': 'top'})
+        # التأكد من أن سبب الاشتباه موجود في العمود
+        if 'سبب الاشتباه' in column_order:
+             worksheet.set_column(column_order.index('سبب الاشتباه'), column_order.index('سبب الاشتباه'), 120, col_format)
+        
+        # تنسيق الأعمدة الأخرى
+        for i, col_name in enumerate(column_order):
+            if col_name != 'سبب الاشتباه':
+                width = 25 if col_name in ["اسم المشتبه به","رقم صاحب العمل/ السجل التجاري"] else 18
+                worksheet.set_column(i,i,width,col_format)
+    
     output.seek(0)
     return output.read()
 
@@ -282,7 +288,7 @@ def main():
                 # إضافة عمود التسلسل (#) لغرض العرض في الجدول
                 df_display.insert(0, '#', range(1, 1 + len(df_display)))
 
-                # 🛑 التعديل هنا: لعرض جميع الحقول المستخلصة
+                # 🛑 عرض جميع الحقول المستخلصة
                 full_columns_order = ["#", "اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
                 
                 # ضمان وجود الأعمدة المطلوبة قبل العرض
