@@ -125,62 +125,62 @@ def segment_document_by_cases(file_bytes, file_name):
 def extract_financial_data(case_text_or_bytes, case_name, file_type, is_segment=False):
     """
     يقوم باستخلاص البيانات من نص قضية منفردة أو ملف (كما كان سابقاً).
+    **تم تبسيط هذا القسم لضمان حل مشاكل الـ Indentation**
     """
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        
-        # إعداد محتويات الطلب
-        if is_segment:
-            # إذا كانت المدخلات نصاً مقسماً، نرسل النص ونشير إلى أنه نص عادي
-            content_parts = [
-                "استخرج البيانات المطلوبة بدقة من النص المرفق. النص يمثل قضية واحدة كاملة.",
-                {"text": case_text_or_bytes} 
-            ]
-        else:
-            # إذا كانت المدخلات بايتات (ملف)، نرسلها كـ inlineData
-            mime_type = "application/pdf" if file_type=='pdf' else f"image/{'jpeg' if file_type=='jpg' else file_type}"
-            content_parts = [
-                "قم باستخلاص جميع البيانات...",
-                {"inlineData": {"data": base64.b64encode(case_text_or_bytes).decode('utf-8'), "mimeType": mime_type}}
-            ]
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    
+    # إعداد محتويات الطلب
+    if is_segment:
+        # إذا كانت المدخلات نصاً مقسماً، نرسل النص ونشير إلى أنه نص عادي
+        content_parts = [
+            "استخرج البيانات المطلوبة بدقة من النص المرفق. النص يمثل قضية واحدة كاملة.",
+            {"text": case_text_or_bytes} 
+        ]
+    else:
+        # إذا كانت المدخلات بايتات (ملف)، نرسلها كـ inlineData
+        mime_type = "application/pdf" if file_type=='pdf' else f"image/{'jpeg' if file_type=='jpg' else file_type}"
+        content_parts = [
+            "قم باستخلاص جميع البيانات...",
+            {"inlineData": {"data": base64.b64encode(case_text_or_bytes).decode('utf-8'), "mimeType": mime_type}}
+        ]
 
-        config = {
-            "systemInstruction": SYSTEM_PROMPT,
-            "responseMimeType": "application/json",
-            "responseSchema": RESPONSE_SCHEMA
-        }
+    config = {
+        "systemInstruction": SYSTEM_PROMPT,
+        "responseMimeType": "application/json",
+        "responseSchema": RESPONSE_SCHEMA
+    }
 
-        # استخدام عدد محدود من المحاولات مع التوقف الأسي (Exponential Backoff)
-        MAX_RETRIES = 5
-        for attempt in range(MAX_RETRIES):
-            try:
-                with st.spinner(f"⏳ جاري استخلاص معلومات القضية: '{case_name}' (محاولة {attempt + 1}/{MAX_RETRIES})..."):
-                    response = client.models.generate_content(model=MODEL_NAME, contents=content_parts, config=config)
+    # استخدام عدد محدود من المحاولات مع التوقف الأسي (Exponential Backoff)
+    MAX_RETRIES = 5
+    for attempt in range(MAX_RETRIES):
+        try:
+            with st.spinner(f"⏳ جاري استخلاص معلومات القضية: '{case_name}' (محاولة {attempt + 1}/{MAX_RETRIES})..."):
+                response = client.models.generate_content(model=MODEL_NAME, contents=content_parts, config=config)
 
-                extracted_data = json.loads(response.text)
-                
-                # إضافة بيانات التتبع
-                extracted_data['اسم الملف'] = case_name
-                extracted_data['وقت الاستخلاص'] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-                st.success(f"✅ تم استخلاص معلومات '{case_name}' بنجاح!")
-                return extracted_data
+            extracted_data = json.loads(response.text)
             
-            except (APIError, json.JSONDecodeError) as e:
-                if attempt < MAX_RETRIES - 1:
-                    import time
-                    wait_time = 2 ** attempt
-                    time.sleep(wait_time)
-                else:
-                    st.error(f"❌ فشل الاستخلاص بعد {MAX_RETRIES} محاولات: {e}")
-                    break # الخروج من حلقة المحاولات
-                    
-        # في حالة الخطأ بعد جميع المحاولات
-        return {
-            'اسم الملف': case_name, 
-            'وقت الاستخلاص': pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"), 
-            'رقم الصادر': 'خطأ في الاستخلاص',
-            'اسم المشتبه به': 'خطأ في الاستخلاص'
-        }
+            # إضافة بيانات التتبع
+            extracted_data['اسم الملف'] = case_name
+            extracted_data['وقت الاستخلاص'] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+            st.success(f"✅ تم استخلاص معلومات '{case_name}' بنجاح!")
+            return extracted_data # العودة بالبيانات المستخلصة بنجاح
+        
+        except (APIError, json.JSONDecodeError, Exception) as e:
+            if attempt < MAX_RETRIES - 1:
+                import time
+                wait_time = 2 ** attempt
+                time.sleep(wait_time)
+            else:
+                st.error(f"❌ فشل الاستخلاص بعد {MAX_RETRIES} محاولات: {e}")
+                # إذا فشلت جميع المحاولات، ستتابع الدالة للعودة ببيانات الخطأ
+
+    # إذا انتهت حلقة المحاولات دون نجاح، نعود ببيانات الخطأ
+    return {
+        'اسم الملف': case_name, 
+        'وقت الاستخلاص': pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"), 
+        'رقم الصادر': 'خطأ في الاستخلاص',
+        'اسم المشتبه به': 'خطأ في الاستخلاص'
+    }
 
 def create_final_report_multiple(all_data):
     """
