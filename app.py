@@ -3,6 +3,7 @@ import pandas as pd
 import json
 import io
 import base64
+import time # تم استيرادها في الأعلى
 from google import genai
 from google.genai.errors import APIError
 # تأكدي من أن ملف db.py موجود وجاهز للعمل
@@ -14,10 +15,11 @@ from db import save_to_db
 # تأكد من تعيين المفتاح هنا أو عبر متغيرات البيئة
 GEMINI_API_KEY = "AIzaSyA5ChIhrl9Tlob2NXyUwcau5vK75sIj-gI" 
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
+MAX_RETRIES = 3 # تم تقليلها لتسريع الاختبار
 
 # 🔥 التعليمات الجديدة والمُحسّنة للتقسيم: التركيز على تحديد كل 'تقرير قضية' كوحدة منفصلة 🔥
 SEGMENTATION_PROMPT = (
-    "أنت محلل وثائق آلي متخصص. تم تزويدك بالنص الكامل لوثيقة رسمية كبيرة تحتوي على عدة تقارير قضايا مالية متسلسلة."
+    "أنت محلل وثائق آلي متخصص. مهمتك هي قراءة النص المستخرج من وثيقة رسمية كبيرة تحتوي على عدة تقارير قضايا مالية متسلسلة."
     "القاعدة لتقسيم النص هي: **يجب تحديد وفصل كل تقرير قضية (Case Report) عن التالي.** "
     "كل تقرير قضية يبدأ عادةً بـ 'بسم الله الرحمن الرحيم' ويتبعه العناوين الرسمية (مثل 'المملكة العربية السعودية' و 'رئاسة أمن الدولة' أو 'وزارة التجارة') وينتهي قبل بداية القضية التالية أو نهاية الوثيقة. "
     "مهمتك هي تقسيم النص إلى قائمة JSON من القضايا الفردية (segments)، حيث يمثل كل عنصر النص الكامل للقضية الواحدة. لا تقم بأي تغيير أو تلخيص للنص."
@@ -71,7 +73,7 @@ def segment_document_by_cases(file_bytes, file_name):
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
         
-        # لتقسيم PDF، يجب إرساله كـ Base64
+        # إعداد محتويات الطلب (نص التعليمات + الملف كـ Base64)
         content_parts = [
             SEGMENTATION_PROMPT,
             {"inlineData": {"data": base64.b64encode(file_bytes).decode('utf-8'), "mimeType": "application/pdf"}}
@@ -83,8 +85,6 @@ def segment_document_by_cases(file_bytes, file_name):
             "responseSchema": SEGMENTATION_SCHEMA
         }
 
-        # استخدام عدد محدود من المحاولات مع التوقف الأسي (Exponential Backoff)
-        MAX_RETRIES = 5
         for attempt in range(MAX_RETRIES):
             try:
                 with st.spinner(f"⏳ جاري تحليل وتقسيم القضايا في '{file_name}' (محاولة {attempt + 1}/{MAX_RETRIES})..."):
@@ -94,50 +94,51 @@ def segment_document_by_cases(file_bytes, file_name):
                         config=config
                     )
                 
+                # التحقق من وجود استجابة نصية قبل محاولة التحميل
+                if not response.text:
+                    raise ValueError("النموذج لم يعد بنص JSON. ربما فشل API.")
+
                 segment_data = json.loads(response.text)
                 
                 if 'cases' in segment_data and isinstance(segment_data['cases'], list) and len(segment_data['cases']) > 0:
                     st.success(f"✅ تم تقسيم '{file_name}' إلى {len(segment_data['cases'])} قضية بنجاح.")
                     return segment_data['cases']
                 else:
-                    # قد يعود النموذج بـ cases=[] إذا لم يجد شيئًا، نرفع خطأ للانتقال للمحاولة التالية
-                    raise ValueError("النموذج لم يتمكن من تقسيم الوثيقة بشكل صحيح أو لم يجد قضايا.")
+                    raise ValueError("النموذج لم يتمكن من تقسيم الوثيقة بشكل صحيح أو أعاد قائمة قضايا فارغة.")
             
             except (APIError, json.JSONDecodeError, ValueError) as e:
                 if attempt < MAX_RETRIES - 1:
-                    # تجربة إعادة محاولة مع تأخير
-                    import time
-                    wait_time = 2 ** attempt  # 1s, 2s, 4s...
+                    wait_time = 2 ** attempt
+                    st.warning(f"⚠️ فشل التقسيم في المحاولة {attempt + 1}. إعادة المحاولة بعد {wait_time} ثانية...")
                     time.sleep(wait_time)
                 else:
                     st.error(f"❌ فشل التقسيم بعد {MAX_RETRIES} محاولات: {e}")
                     # إذا فشلت جميع المحاولات، نعود للمسار القديم (قضية واحدة)
                     break 
         
-        # إذا لم يتم العثور على تقسيم، نعود للمسار القديم
+        # إذا لم يتم العثور على تقسيم بعد جميع المحاولات، نعود للمسار القديم
         st.warning(f"⚠️ فشل التقسيم التلقائي. سيتم التعامل مع الملف بالكامل كقضية واحدة.")
         return [file_bytes] 
             
     except Exception as e:
+        # خطأ غير متوقع على مستوى الدالة (غالباً مشكلة في الاتصال أو التهيئة)
         st.error(f"❌ خطأ غير متوقع أثناء تقسيم الوثيقة: {e}")
         return [file_bytes]
 
 def extract_financial_data(case_text_or_bytes, case_name, file_type, is_segment=False):
     """
     يقوم باستخلاص البيانات من نص قضية منفردة أو ملف (كما كان سابقاً).
-    **تم تبسيط هذا القسم لضمان حل مشاكل الـ Indentation**
+    **تم تبسيط الـ try/except لضمان عدم وجود SyntaxError**
     """
     client = genai.Client(api_key=GEMINI_API_KEY)
     
-    # إعداد محتويات الطلب
+    # إعداد محتويات الطلب بناءً على نوع المدخلات
     if is_segment:
-        # إذا كانت المدخلات نصاً مقسماً، نرسل النص ونشير إلى أنه نص عادي
         content_parts = [
             "استخرج البيانات المطلوبة بدقة من النص المرفق. النص يمثل قضية واحدة كاملة.",
             {"text": case_text_or_bytes} 
         ]
     else:
-        # إذا كانت المدخلات بايتات (ملف)، نرسلها كـ inlineData
         mime_type = "application/pdf" if file_type=='pdf' else f"image/{'jpeg' if file_type=='jpg' else file_type}"
         content_parts = [
             "قم باستخلاص جميع البيانات...",
@@ -150,29 +151,32 @@ def extract_financial_data(case_text_or_bytes, case_name, file_type, is_segment=
         "responseSchema": RESPONSE_SCHEMA
     }
 
-    # استخدام عدد محدود من المحاولات مع التوقف الأسي (Exponential Backoff)
-    MAX_RETRIES = 5
+    # حلقة إعادة المحاولة
     for attempt in range(MAX_RETRIES):
         try:
             with st.spinner(f"⏳ جاري استخلاص معلومات القضية: '{case_name}' (محاولة {attempt + 1}/{MAX_RETRIES})..."):
                 response = client.models.generate_content(model=MODEL_NAME, contents=content_parts, config=config)
 
+            # التحقق من وجود نص قبل التحميل
+            if not response.text:
+                raise ValueError("النموذج لم يعد بنص JSON. ربما فشل API.")
+                
             extracted_data = json.loads(response.text)
             
-            # إضافة بيانات التتبع
+            # إضافة بيانات التتبع عند النجاح
             extracted_data['اسم الملف'] = case_name
             extracted_data['وقت الاستخلاص'] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
             st.success(f"✅ تم استخلاص معلومات '{case_name}' بنجاح!")
-            return extracted_data # العودة بالبيانات المستخلصة بنجاح
+            return extracted_data # نجاح، خروج من الدالة
         
         except (APIError, json.JSONDecodeError, Exception) as e:
             if attempt < MAX_RETRIES - 1:
-                import time
                 wait_time = 2 ** attempt
+                st.warning(f"⚠️ فشل الاستخلاص في المحاولة {attempt + 1}. إعادة المحاولة بعد {wait_time} ثانية...")
                 time.sleep(wait_time)
             else:
                 st.error(f"❌ فشل الاستخلاص بعد {MAX_RETRIES} محاولات: {e}")
-                # إذا فشلت جميع المحاولات، ستتابع الدالة للعودة ببيانات الخطأ
+                break
 
     # إذا انتهت حلقة المحاولات دون نجاح، نعود ببيانات الخطأ
     return {
@@ -256,6 +260,7 @@ def main():
                     case_segments_or_bytes = segment_document_by_cases(file_bytes, file_name)
                     
                     # تحديد ما إذا كان الناتج عبارة عن نصوص مقسمة (is_segment=True) أم بايتات أصلية (is_segment=False)
+                    # نتحقق مما إذا كانت جميع العناصر في القائمة من نوع 'str' (نصوص مقسمة)
                     is_segment_mode = all(isinstance(item, str) for item in case_segments_or_bytes)
                     
                     if is_segment_mode and len(case_segments_or_bytes) > 0:
@@ -265,16 +270,23 @@ def main():
                             case_name = f"{file_name} (قضية #{i+1})"
                             # نرسل النص المستخرج للقضية الواحدة لعملية الاستخلاص
                             data = extract_financial_data(case_content, case_name, file_type, is_segment=True)
-                            if data:
+                            if data and 'خطأ في الاستخلاص' not in data.get('رقم الصادر', ''):
                                 all_extracted_data.append(data)
                                 save_to_db(data)
+                            elif data:
+                                # في حال وجود خطأ في الاستخلاص، نضيف بيانات الخطأ للسجل مع رسالة
+                                all_extracted_data.append(data)
+                                st.error(f"❌ فشل استخلاص بيانات القضية #{i+1} وسيتم تسجيلها كـ 'خطأ في الاستخلاص'.")
+
                     else:
                         # وضع القضية الواحدة (الملف بالكامل)
-                        st.warning(f"تم التعامل مع '{file_name}' كقضية واحدة (أو فشل التقسيم). جاري الاستخلاص...")
+                        st.warning(f"تم التعامل مع '{file_name}' كقضية واحدة (فشل التقسيم). جاري الاستخلاص...")
                         data = extract_financial_data(file_bytes, file_name, file_type, is_segment=False)
-                        if data:
+                        if data and 'خطأ في الاستخلاص' not in data.get('رقم الصادر', ''):
                             all_extracted_data.append(data)
                             save_to_db(data)
+                        elif data:
+                            all_extracted_data.append(data)
                 
                 else:
                     st.error(f"نوع الملف {file_type} غير مدعوم للمعالجة.")
