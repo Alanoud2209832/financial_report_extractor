@@ -70,14 +70,9 @@ SEGMENTATION_SCHEMA = {
 def segment_document_by_cases(file_bytes, file_name):
     """
     يستخدم Gemini لتقسيم ملف كبير متعدد القضايا إلى قائمة من القضايا الفردية (نصوص).
-    هذا لمعالجة مشكلة الملف الواحد الذي يحتوي على أكثر من قضية.
     """
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
-        
-        # تحويل البايتات إلى نص (افتراضياً أن النص مقروء)
-        # ملاحظة: هذه الطريقة بسيطة وتعمل لملفات PDF/صور النصية. 
-        # إذا كان الملف صورة، يجب استخدام Gemini لـ OCR أولاً (وهو ما نقوم به في دالة extract_financial_data)
         
         # لتبسيط العملية ودمجها مع استخلاص البيانات لاحقاً، سنرسل الملف كـ Base64
         # ونطلب منه تحليل المحتوى والتقسيم.
@@ -105,10 +100,12 @@ def segment_document_by_cases(file_bytes, file_name):
         
         if 'cases' in segment_data and isinstance(segment_data['cases'], list):
             st.success(f"✅ تم تقسيم '{file_name}' إلى {len(segment_data['cases'])} قضية بنجاح.")
-            return segment_data['cases']
+            # إرجاع القائمة بالنصوص المستخرجة لكل قضية
+            return segment_data['cases'] 
         else:
             st.warning(f"⚠️ فشل التقسيم التلقائي. سيتم التعامل مع الملف بالكامل كقضية واحدة.")
-            return [file_bytes] # العودة للمسار القديم: معالجة الملف بالكامل كقضية واحدة
+            # في حالة الفشل، نعود إلى المسار القديم: معالجة الملف بالكامل كمدخل واحد (بايتات)
+            return [file_bytes] 
             
     except APIError as e:
         st.error(f"❌ خطأ في الاتصال بـ Gemini API أثناء التقسيم: {e}")
@@ -124,14 +121,15 @@ def extract_financial_data(case_text_or_bytes, case_name, file_type, is_segment=
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
         
-        # إذا كانت مدخلات الدالة نصاً (قضية مقسمة)، نرسل النص مباشرة.
-        # إذا كانت بايتات (ملف)، نرسلها كـ inlineData.
+        # إعداد محتويات الطلب
         if is_segment:
+            # إذا كانت المدخلات نصاً مقسماً، نرسل النص ونشير إلى أنه نص عادي
             content_parts = [
-                "استخرج البيانات التالية من النص فقط، ولا تستخدم أي بيانات من ملف محمل.",
-                case_text_or_bytes
+                "استخرج البيانات المطلوبة من النص المرفق. النص يمثل قضية واحدة كاملة.",
+                {"text": case_text_or_bytes} 
             ]
         else:
+            # إذا كانت المدخلات بايتات (ملف)، نرسلها كـ inlineData
             mime_type = "application/pdf" if file_type=='pdf' else f"image/{'jpeg' if file_type=='jpg' else file_type}"
             content_parts = [
                 "قم باستخلاص جميع البيانات...",
@@ -157,25 +155,31 @@ def extract_financial_data(case_text_or_bytes, case_name, file_type, is_segment=
 
     except Exception as e:
         st.error(f"❌ خطأ أثناء الاستخلاص من '{case_name}': {e}")
-        return None
+        # في حالة الخطأ، نرجع قاموساً فارغاً لضمان عدم توقف البرنامج
+        return {'اسم الملف': case_name, 'وقت الاستخلاص': pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"), 'رقم الصادر': 'خطأ في الاستخلاص'}
+
 
 def create_final_report_multiple(all_data):
-    # ... (هذه الدالة تبقى كما هي لتوليد تقرير Excel)
+    """
+    يجمع البيانات المستخلصة ويُنشئ ملف Excel.
+    """
     import xlsxwriter
     if not all_data: return None
 
     df_list = []
     for i, data in enumerate(all_data, 1):
-        # التأكد من عدم وجود # في البيانات الأصلية وتعيين رقم تسلسلي
+        # إضافة رقم التسلسل هنا لتقرير Excel
         data_copy = data.copy()
         data_copy['#'] = i
         df_list.append(data_copy)
 
     df = pd.DataFrame(df_list)
+    
+    # ضمان وجود جميع الأعمدة المطلوبة في الترتيب الصحيح
     column_order = ["#", "اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
-    for col in column_order:
-        if col not in df.columns: df[col] = 'غير متوفر'
-    df = df[column_order]
+    
+    # إعادة ترتيب الأعمدة وتعبئة القيم المفقودة بـ 'غير متوفر'
+    df = df.reindex(columns=column_order, fill_value='غير متوفر')
 
     output = io.BytesIO()
     writer = pd.ExcelWriter(output, engine='xlsxwriter')
@@ -193,7 +197,7 @@ def create_final_report_multiple(all_data):
     return output.read()
 
 # ===============================
-# 3. واجهة المستخدم (التعديل في جزء معالجة الملفات)
+# 3. واجهة المستخدم (تم تعديل قسم العرض لتجنب KeyError)
 # ===============================
 def main():
     st.set_page_config(layout="wide", page_title="أداة استخلاص وتقارير مالية")
@@ -215,24 +219,28 @@ def main():
                 file_type = file_name.split('.')[-1].lower()
                 st.info(f"جاري معالجة الملف الأساسي: **{file_name}**")
 
-                # 🌟 الميزة الجديدة: تقسيم الملف الكبير إلى قضايا منفردة 🌟
+                # الميزة الجديدة: تقسيم الملف الكبير إلى قضايا منفردة 
                 if file_type == 'pdf' or file_type in ['png', 'jpg', 'jpeg']:
-                    # نطلب من النموذج تقسيم الملف أولاً
-                    case_segments = segment_document_by_cases(file_bytes, file_name)
                     
-                    if len(case_segments) > 1:
-                        # إذا تم تقسيم الملف بنجاح إلى أكثر من قضية
-                        st.subheader(f"تم العثور على {len(case_segments)} قضية في الملف.")
-                        for i, case_text in enumerate(case_segments):
+                    # نستخدم segment_document_by_cases وهي سترجع قائمة من النصوص (segments) أو قائمة تحتوي على البايتات الأصلية إذا فشل التقسيم
+                    case_segments_or_bytes = segment_document_by_cases(file_bytes, file_name)
+                    
+                    # تحديد ما إذا كان الناتج عبارة عن نصوص مقسمة (is_segment=True) أم بايتات أصلية (is_segment=False)
+                    is_segment_mode = all(isinstance(item, str) for item in case_segments_or_bytes)
+                    
+                    if is_segment_mode and len(case_segments_or_bytes) > 0:
+                        # وضع التقسيم
+                        st.subheader(f"تم العثور على {len(case_segments_or_bytes)} قضية في الملف.")
+                        for i, case_content in enumerate(case_segments_or_bytes):
                             case_name = f"{file_name} (قضية #{i+1})"
                             # نرسل النص المستخرج للقضية الواحدة لعملية الاستخلاص
-                            data = extract_financial_data(case_text, case_name, file_type, is_segment=True)
+                            data = extract_financial_data(case_content, case_name, file_type, is_segment=True)
                             if data:
                                 all_extracted_data.append(data)
                                 save_to_db(data)
                     else:
-                        # إذا لم يتم التقسيم (أو إذا كان الملف قضية واحدة فعلاً)
-                        st.warning(f"تم التعامل مع '{file_name}' كقضية واحدة. جاري الاستخلاص...")
+                        # وضع القضية الواحدة (الملف بالكامل)
+                        st.warning(f"تم التعامل مع '{file_name}' كقضية واحدة (أو فشل التقسيم). جاري الاستخلاص...")
                         data = extract_financial_data(file_bytes, file_name, file_type, is_segment=False)
                         if data:
                             all_extracted_data.append(data)
@@ -245,9 +253,18 @@ def main():
             if all_extracted_data:
                 st.subheader("✅ جميع البيانات المستخلصة")
                 df_display = pd.DataFrame(all_extracted_data)
-                # عرض فقط أهم الأعمدة في الواجهة
+                
+                # إضافة عمود التسلسل (#) لغرض العرض في الجدول
+                df_display.insert(0, '#', range(1, 1 + len(df_display)))
+
+                # الأعمدة المطلوبة للعرض
                 cols_to_display = ["#", "اسم الملف", "رقم الصادر", "اسم المشتبه به", "رقم الهوية"]
-                st.dataframe(df_display[cols_to_display], use_container_width=True, height=300)
+                
+                # 🔥 التصحيح الرئيسي: نضمن وجود الأعمدة المطلوبة قبل العرض
+                # نستخدم reindex لتعبئة أي أعمدة مفقودة بـ 'غير متوفر' قبل محاولة الفلترة
+                df_safe_display = df_display.reindex(columns=cols_to_display, fill_value='غير متوفر')
+
+                st.dataframe(df_safe_display, use_container_width=True, height=300)
 
                 excel_data_bytes = create_final_report_multiple(all_extracted_data)
                 if excel_data_bytes:
