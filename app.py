@@ -25,7 +25,7 @@ SEGMENTATION_PROMPT = (
     "ملاحظة: تجاهل أي رؤوس أو تذييلات مكررة بين القضايا."
 )
 
-# البرومت المستخدم للاستخلاص (Extraction Prompt) - تم نقله بالكامل كما كان
+# البرومت المستخدم للاستخلاص (Extraction Prompt)
 SYSTEM_PROMPT = (
     "أنت نظام استخلاص بيانات آلي (OCR/NLP)التعديل هنا: التركيز على الاستخلاص الحرفي والنسخ الدقيق للبيانات، خاصة في الحقول النصية الطويلة."
     "أنت نظام استخلاص بيانات آلي (OCR/NLP). مهمتك هي قراءة النص والصورة المستخرجة من الوثيقة المالية "
@@ -68,15 +68,9 @@ SEGMENTATION_SCHEMA = {
 # ===============================
 
 def segment_document_by_cases(file_bytes, file_name):
-    """
-    يستخدم Gemini لتقسيم ملف كبير متعدد القضايا إلى قائمة من القضايا الفردية (نصوص).
-    """
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
-        
-        # لتبسيط العملية ودمجها مع استخلاص البيانات لاحقاً، سنرسل الملف كـ Base64
-        # ونطلب منه تحليل المحتوى والتقسيم.
-        
+
         content_parts = [
             SEGMENTATION_PROMPT,
             {"inlineData": {"data": base64.b64encode(file_bytes).decode('utf-8'), "mimeType": "application/pdf"}}
@@ -89,7 +83,6 @@ def segment_document_by_cases(file_bytes, file_name):
         }
 
         with st.spinner(f"⏳ جاري تحليل وتقسيم القضايا في '{file_name}'..."):
-            # نستخدم النموذج مباشرة لتقسيم النص
             response = client.models.generate_content(
                 model=MODEL_NAME, 
                 contents=content_parts, 
@@ -100,11 +93,9 @@ def segment_document_by_cases(file_bytes, file_name):
         
         if 'cases' in segment_data and isinstance(segment_data['cases'], list):
             st.success(f"✅ تم تقسيم '{file_name}' إلى {len(segment_data['cases'])} قضية بنجاح.")
-            # إرجاع القائمة بالنصوص المستخرجة لكل قضية
             return segment_data['cases'] 
         else:
             st.warning(f"⚠️ فشل التقسيم التلقائي. سيتم التعامل مع الملف بالكامل كقضية واحدة.")
-            # في حالة الفشل، نعود إلى المسار القديم: معالجة الملف بالكامل كمدخل واحد (بايتات)
             return [file_bytes] 
             
     except APIError as e:
@@ -114,22 +105,17 @@ def segment_document_by_cases(file_bytes, file_name):
         st.error(f"❌ خطأ غير متوقع أثناء تقسيم الوثيقة: {e}")
         return [file_bytes]
 
+
 def extract_financial_data(case_text_or_bytes, case_name, file_type, is_segment=False):
-    """
-    يقوم باستخلاص البيانات من نص قضية منفردة أو ملف (كما كان سابقاً).
-    """
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
         
-        # إعداد محتويات الطلب
         if is_segment:
-            # إذا كانت المدخلات نصاً مقسماً، نرسل النص ونشير إلى أنه نص عادي
             content_parts = [
                 "استخرج البيانات المطلوبة من النص المرفق. النص يمثل قضية واحدة كاملة.",
-                {"text": case_text_or_bytes} 
+                {"text": case_text_or_bytes}
             ]
         else:
-            # إذا كانت المدخلات بايتات (ملف)، نرسلها كـ inlineData
             mime_type = "application/pdf" if file_type=='pdf' else f"image/{'jpeg' if file_type=='jpg' else file_type}"
             content_parts = [
                 "قم باستخلاص جميع البيانات...",
@@ -147,38 +133,31 @@ def extract_financial_data(case_text_or_bytes, case_name, file_type, is_segment=
 
         extracted_data = json.loads(response.text)
         
-        # إضافة بيانات التتبع
         extracted_data['اسم الملف'] = case_name
         extracted_data['وقت الاستخلاص'] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+
         st.success(f"✅ تم استخلاص معلومات '{case_name}' بنجاح!")
         return extracted_data
 
     except Exception as e:
         st.error(f"❌ خطأ أثناء الاستخلاص من '{case_name}': {e}")
-        # في حالة الخطأ، نرجع قاموساً فارغاً لضمان عدم توقف البرنامج
         return {'اسم الملف': case_name, 'وقت الاستخلاص': pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"), 'رقم الصادر': 'خطأ في الاستخلاص'}
 
 
 def create_final_report_multiple(all_data):
-    """
-    يجمع البيانات المستخلصة ويُنشئ ملف Excel.
-    """
     import xlsxwriter
     if not all_data: return None
 
     df_list = []
     for i, data in enumerate(all_data, 1):
-        # إضافة رقم التسلسل هنا لتقرير Excel
         data_copy = data.copy()
         data_copy['#'] = i
         df_list.append(data_copy)
 
     df = pd.DataFrame(df_list)
-    
-    # ضمان وجود جميع الأعمدة المطلوبة في الترتيب الصحيح
+
     column_order = ["#", "اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
     
-    # إعادة ترتيب الأعمدة وتعبئة القيم المفقودة بـ 'غير متوفر'
     df = df.reindex(columns=column_order, fill_value='غير متوفر')
 
     output = io.BytesIO()
@@ -197,8 +176,9 @@ def create_final_report_multiple(all_data):
     return output.read()
 
 # ===============================
-# 3. واجهة المستخدم (تم تعديل قسم العرض لتجنب KeyError)
+# 3. واجهة المستخدم
 # ===============================
+
 def main():
     st.set_page_config(layout="wide", page_title="أداة استخلاص وتقارير مالية")
     st.title("أداة استخلاص وتقارير القضايا")
@@ -219,27 +199,21 @@ def main():
                 file_type = file_name.split('.')[-1].lower()
                 st.info(f"جاري معالجة الملف الأساسي: **{file_name}**")
 
-                # الميزة الجديدة: تقسيم الملف الكبير إلى قضايا منفردة 
                 if file_type == 'pdf' or file_type in ['png', 'jpg', 'jpeg']:
                     
-                    # نستخدم segment_document_by_cases وهي سترجع قائمة من النصوص (segments) أو قائمة تحتوي على البايتات الأصلية إذا فشل التقسيم
                     case_segments_or_bytes = segment_document_by_cases(file_bytes, file_name)
                     
-                    # تحديد ما إذا كان الناتج عبارة عن نصوص مقسمة (is_segment=True) أم بايتات أصلية (is_segment=False)
                     is_segment_mode = all(isinstance(item, str) for item in case_segments_or_bytes)
                     
                     if is_segment_mode and len(case_segments_or_bytes) > 0:
-                        # وضع التقسيم
                         st.subheader(f"تم العثور على {len(case_segments_or_bytes)} قضية في الملف.")
                         for i, case_content in enumerate(case_segments_or_bytes):
                             case_name = f"{file_name} (قضية #{i+1})"
-                            # نرسل النص المستخرج للقضية الواحدة لعملية الاستخلاص
                             data = extract_financial_data(case_content, case_name, file_type, is_segment=True)
                             if data:
                                 all_extracted_data.append(data)
                                 save_to_db(data)
                     else:
-                        # وضع القضية الواحدة (الملف بالكامل)
                         st.warning(f"تم التعامل مع '{file_name}' كقضية واحدة (أو فشل التقسيم). جاري الاستخلاص...")
                         data = extract_financial_data(file_bytes, file_name, file_type, is_segment=False)
                         if data:
@@ -254,14 +228,10 @@ def main():
                 st.subheader("✅ جميع البيانات المستخلصة")
                 df_display = pd.DataFrame(all_extracted_data)
                 
-                # إضافة عمود التسلسل (#) لغرض العرض في الجدول
                 df_display.insert(0, '#', range(1, 1 + len(df_display)))
 
-                # الأعمدة المطلوبة للعرض
                 cols_to_display = ["#", "اسم الملف", "رقم الصادر", "اسم المشتبه به", "رقم الهوية"]
                 
-                # 🔥 التصحيح الرئيسي: نضمن وجود الأعمدة المطلوبة قبل العرض
-                # نستخدم reindex لتعبئة أي أعمدة مفقودة بـ 'غير متوفر' قبل محاولة الفلترة
                 df_safe_display = df_display.reindex(columns=cols_to_display, fill_value='غير متوفر')
 
                 st.dataframe(df_safe_display, use_container_width=True, height=300)
@@ -276,7 +246,6 @@ def main():
                     )
 
 if __name__ == '__main__':
-    # تأكد من أنك قمت بتعيين مفتاح API لـ Gemini
     if not GEMINI_API_KEY:
         st.error("يرجى تعيين مفتاح Gemini API في المتغير GEMINI_API_KEY داخل ملف app.py.")
     else:
