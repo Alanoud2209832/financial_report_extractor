@@ -112,9 +112,9 @@ def segment_document_by_cases(file_bytes, file_name):
                 else:
                     st.error(f"❌ فشل التقسيم بعد {MAX_RETRIES} محاولات: {e}")
                     # إذا فشلت جميع المحاولات، نعود للمسار القديم (قضية واحدة)
-                    return [file_bytes] 
+                    break 
         
-        # إذا لم يتم الخروج من الحلقة بـ return، نعود للمسار القديم
+        # إذا لم يتم العثور على تقسيم، نعود للمسار القديم
         st.warning(f"⚠️ فشل التقسيم التلقائي. سيتم التعامل مع الملف بالكامل كقضية واحدة.")
         return [file_bytes] 
             
@@ -181,7 +181,6 @@ def extract_financial_data(case_text_or_bytes, case_name, file_type, is_segment=
             'رقم الصادر': 'خطأ في الاستخلاص',
             'اسم المشتبه به': 'خطأ في الاستخلاص'
         }
-
 
 def create_final_report_multiple(all_data):
     """
