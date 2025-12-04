@@ -1,12 +1,13 @@
-# db.py (الكود المصحح)
+# db.py
 import psycopg2
 import os
 from dotenv import load_dotenv
 import streamlit as st
 from psycopg2 import sql 
-import pandas as pd # مهم
+import pandas as pd 
 
 load_dotenv()
+# تأكد من أن هذا المتغير تم تعريفه في ملف .env
 DB_URL = os.getenv("DATABASE_URL")
 
 # قائمة الأسماء الحقيقية للأعمدة في قاعدة البيانات
@@ -21,11 +22,15 @@ DB_COLUMN_NAMES = [
     "وقت الاستخلاص"
 ]
 
-# قائمة مفاتيح Python هي نفسها أسماء الأعمدة
 DATA_KEYS = DB_COLUMN_NAMES 
 
 def connect_db():
+    """ينشئ اتصالًا بقاعدة البيانات."""
     try:
+        # تأكد من أن DB_URL متوفر
+        if not DB_URL:
+            st.error("❌ متغير DATABASE_URL غير موجود. يرجى مراجعة ملف .env")
+            return None
         conn = psycopg2.connect(DB_URL, sslmode='require') 
         return conn
     except Exception as e:
@@ -33,6 +38,7 @@ def connect_db():
         return None
 
 def save_to_db(extracted_data):
+    """يحفظ البيانات المستخلصة إلى جدول تقارير_الاشتباه."""
     conn = connect_db()
     if not conn:
         return False
@@ -40,34 +46,31 @@ def save_to_db(extracted_data):
     try:
         cur = conn.cursor()
         
-        # إعداد البيانات وتحويل الفارغ إلى None/NULL
-        processed_data = {}
         insert_columns = []
         insert_values = []
         
-        # نمر على البيانات المستخلصة فقط إذا كانت غير فارغة
-        for key in DATA_KEYS: # DATA_KEYS هي DB_COLUMN_NAMES 
+        # بناء قائمة الأعمدة والقيم لتضمينها في استعلام INSERT
+        for key in DATA_KEYS:
             value = extracted_data.get(key)
             
-            # 💡 يتم إهمال الأعمدة الفارغة تماماً من استعلام INSERT
+            # إذا كانت القيمة فارغة ('غير متوفر'، None، pd.NA، أو سلسلة فارغة)، يتم إرسالها كـ NULL
             if value is None or value == 'غير متوفر' or value == '' or pd.isna(value):
-                # إذا كانت القيمة فارغة، نضعها None ليتم تحويلها إلى NULL في SQL
-                processed_data[key] = None
+                processed_value = None
             else:
-                processed_data[key] = value
+                processed_value = value
 
-            # نبني قائمة الأعمدة والقيم فقط للعناصر غير الفارغة (للسماح بالقيم الافتراضية)
+            # نُدرج الأعمدة والقيم الخاصة بها في القائمة
             insert_columns.append(sql.Identifier(key))
-            insert_values.append(sql.Literal(processed_data.get(key)))
+            insert_values.append(sql.Literal(processed_value))
             
 
         # بناء استعلام INSERT الديناميكي
         columns_sql = sql.SQL(', ').join(insert_columns)
         values_list = sql.SQL(', ').join(insert_values)
 
-        # بناء جملة INSERT النهائية باستخدام اسم الجدول الصحيح
+        # استخدام sql.SQL لاسم الجدول (لحل مشكلة الاسم العربي)
         insert_query = sql.SQL("""
-            INSERT INTO {table_name} ({columns})
+            INSERT INTO public.تقارير_الاشتباه ({columns})
             VALUES ({values})
         """).format(
             table_name=sql.SQL('تقارير_الاشتباه'), 
@@ -82,9 +85,37 @@ def save_to_db(extracted_data):
         conn.close()
         return True
     except Exception as e:
-        # ⚠️ الآن يجب أن يظهر هذا الخطأ تفاصيل المشكلة (مثل خطأ في التاريخ أو الرقم)
         st.error(f"❌ حدث خطأ أثناء حفظ البيانات: {e}")
         if conn:
             conn.rollback()
             conn.close()
         return False
+
+def fetch_all_reports():
+    """يجلب جميع السجلات من جدول تقارير_الاشتباه."""
+    conn = connect_db()
+    if not conn:
+        return None, None # إرجاع None, None عند فشل الاتصال
+
+    try:
+        cur = conn.cursor()
+        
+        # استخدام sql.SQL لاسم الجدول
+        select_query = sql.SQL('SELECT * FROM public.تقارير_الاشتباه')
+        
+        cur.execute(select_query)
+        
+        column_names = [desc[0] for desc in cur.description]
+        records = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        return records, column_names
+
+    except Exception as e:
+        # ⚠️ هذا هو المكان الذي يظهر فيه خطأ "relation does not exist"
+        st.error(f"❌ حدث خطأ أثناء جلب البيانات من قاعدة البيانات: {e}")
+        if conn:
+            conn.close()
+        return None, None # إرجاع None, None عند الفشل
