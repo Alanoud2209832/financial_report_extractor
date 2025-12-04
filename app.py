@@ -8,7 +8,6 @@ import os
 from google import genai
 from google.genai.errors import APIError
 from db import save_to_db, fetch_all_reports
-
 # ===============================
 # 1. إعدادات API
 # ===============================
