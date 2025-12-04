@@ -7,6 +7,14 @@ from psycopg2 import sql
 import pandas as pd 
 import re # لإزالة الأحرف غير الرقمية
 
+# محاولة استيراد مكتبة التحويل الهجري (مهمة لحل مشكلتك)
+try:
+    from hijri_converter import Hijri
+except ImportError:
+    # سيظهر هذا التحذير إذا لم يتم تثبيت hijri-converter
+    st.warning("⚠️ مكتبة hijri-converter غير مثبتة. التواريخ الهجرية قد لا يتم تحويلها بشكل صحيح.")
+    Hijri = None 
+
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
 
@@ -24,6 +32,19 @@ DB_COLUMN_NAMES = [
 
 DATA_KEYS = DB_COLUMN_NAMES 
 
+# دالة مساعدة لتحويل الأرقام العربية إلى إنجليزية
+def arabic_to_english_numbers(text):
+    if not isinstance(text, str):
+        return text
+    
+    arabic_map = {
+        '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
+        '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9'
+    }
+    # استخدام ترجمة النص لتحويل الأرقام العربية
+    return text.translate(str.maketrans(arabic_map))
+
+
 def connect_db():
     """ينشئ اتصالًا بقاعدة البيانات."""
     try:
@@ -33,36 +54,14 @@ def connect_db():
         conn = psycopg2.connect(DB_URL, sslmode='require') 
         return conn
     except Exception as e:
-        # إظهار رسالة الخطأ للمطور (يمكنك إزالتها في الإنتاج)
         st.error(f"❌ فشل الاتصال بقاعدة البيانات: {e}") 
         return None
 
+
 def clean_data_type(key, value):
     """تنظيف وتحويل القيم إلى تنسيقات صالحة لـ PostgreSQL."""
-    # ب. محاولة التحويل الهجري (للتاريخ الصادر والوارد)
-        if Hijri and key in ["تاريخ الصادر", "تاريخ الوارد"]:
-            try:
-                # تنظيف النص بالكامل من المسافات وعلامات التنقيط باستثناء الشرطة المائلة
-                clean_str = date_str.replace('م', '').strip()
-                
-                parts = clean_str.split('/')
-                if len(parts) == 3:
-                    # تنظيف الأرقام العربية وتحويلها إلى أعداد صحيحة
-                    # استخدام re.sub لتنظيف أي شيء غير الأرقام
-                    y, m, d = [int(re.sub(r'[^\d]', '', p)) for p in parts]
-                    
-                    # 💡 التعديل هنا: محاولة استكمال السنة إذا كانت أرقامها قليلة
-                    if len(str(y)) < 4 and y < 1000:
-                        y += 1400 # إضافة 1400 لاكتمال السنة الهجرية (مثال 445 تصبح 1445)
-                    
-                    # التأكد من أن السنة هجرية
-                    if y > 1300 and y < 1500: 
-                        gregorian_date = Hijri(y, m, d).to_gregorian()
-                        return gregorian_date
-                    
-            except Exception:
-                pass
-    # 1. التعامل مع القيم الفارغة
+    
+    # 1. التعامل مع القيم الفارغة (يجب أن تكون أولاً)
     if value is None or value == 'غير متوفر' or value == '' or pd.isna(value):
         return None
 
@@ -70,10 +69,11 @@ def clean_data_type(key, value):
     numeric_fields = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
     if key in numeric_fields:
         try:
+            # تحويل الأرقام العربية إلى إنجليزية قبل معالجتها كرقم
+            cleaned_value = arabic_to_english_numbers(str(value)) 
+            
             # إزالة أي أحرف غير رقمية أو علامات عشرية غير ضرورية
-            # مثال: '٦,٣١٦' -> '6316' أو '392,150' -> '392150'
-            cleaned_value = str(value).replace('،', '').replace(',', '')
-            # إزالة أي رموز غير ضرورية
+            cleaned_value = cleaned_value.replace('،', '').replace(',', '')
             cleaned_value = re.sub(r'[^\d\.]', '', cleaned_value)
             
             return float(cleaned_value)
@@ -81,20 +81,43 @@ def clean_data_type(key, value):
             st.warning(f"⚠️ تنبيه: فشل تحويل القيمة '{value}' في حقل '{key}' إلى رقم.")
             return None
             
-    # 3. تحويل الأعمدة التاريخية (DATE)
+    # 3. تحويل الأعمدة التاريخية (DATE) - الجزء الذي يحل مشكلتك
     date_fields = ["تاريخ الصادر", "تاريخ الميلاد الوافد", "تاريخ الدخول", "تاريخ الوارد", "تاريخ الدارسة من", "تاريخ الدراسة الى"]
     if key in date_fields:
+        
+        # 💡 الخطوة الجديدة: تحويل الأرقام العربية في التاريخ إلى إنجليزية
+        date_str = arabic_to_english_numbers(str(value))
+        
+        # أ. محاولة تحويل ميلادي مباشر
         try:
-            # محاولة تحويل التاريخ باستخدام pandas (تدعم العديد من التنسيقات الميلادية)
-            # إذا كان التاريخ هجرياً، ستحتاج إلى مكتبة تحويل هجري خارجية، وإلا سيفشل
-            date_obj = pd.to_datetime(value, errors='ignore', dayfirst=False)
+            date_obj = pd.to_datetime(date_str, errors='coerce', dayfirst=False)
             if pd.notna(date_obj):
                 return date_obj.date()
-            else:
-                return None
         except Exception:
-            st.warning(f"⚠️ تنبيه: فشل تحويل القيمة '{value}' في حقل '{key}' إلى تاريخ.")
-            return None
+            pass
+        
+        # ب. محاولة التحويل الهجري
+        if Hijri:
+            try:
+                clean_str = date_str.replace('م', '').strip()
+                parts = clean_str.split('/')
+                
+                if len(parts) == 3:
+                    y, m, d = [int(re.sub(r'[^\d]', '', p)) for p in parts]
+                    
+                    # معالجة السنة غير المكتملة (445 -> 1445)
+                    if y >= 400 and y < 1000:
+                        y += 1000  
+                    
+                    if y > 1300 and y < 1500: 
+                        gregorian_date = Hijri(y, m, d).to_gregorian()
+                        return gregorian_date.date()
+                    
+            except Exception:
+                pass
+
+        st.warning(f"⚠️ تنبيه: فشل تحويل القيمة '{value}' في حقل '{key}' إلى تاريخ.")
+        return None
 
     # 4. القيم الأخرى (VARCHAR/TEXT)
     return value
@@ -112,23 +135,19 @@ def save_to_db(extracted_data):
         insert_columns = []
         insert_values = []
         
-        # بناء قائمة الأعمدة والقيم لتضمينها في استعلام INSERT
         for key in DATA_KEYS:
             value = extracted_data.get(key)
             
             # 💡 تنظيف وتحويل القيمة
             processed_value = clean_data_type(key, value)
 
-            # نُدرج الأعمدة والقيم الخاصة بها في القائمة
             insert_columns.append(sql.Identifier(key))
             insert_values.append(sql.Literal(processed_value))
             
 
-        # بناء استعلام INSERT الديناميكي
         columns_sql = sql.SQL(', ').join(insert_columns)
         values_list = sql.SQL(', ').join(insert_values)
 
-        # استخدام sql.SQL لاسم الجدول مع ذكر المخطط (Schema) لزيادة الموثوقية
         insert_query = sql.SQL("""
             INSERT INTO public.تقارير_الاشتباه ({columns})
             VALUES ({values})
@@ -144,7 +163,6 @@ def save_to_db(extracted_data):
         conn.close()
         return True
     except Exception as e:
-        # إظهار رسالة الخطأ الدقيقة لتحديد المشكلة الأخيرة (إن وجدت)
         st.error(f"❌ حدث خطأ أثناء حفظ البيانات: {e}")
         if conn:
             conn.rollback()
@@ -160,7 +178,6 @@ def fetch_all_reports():
     try:
         cur = conn.cursor()
         
-        # استخدام sql.SQL لاسم الجدول مع ذكر المخطط (Schema)
         select_query = sql.SQL('SELECT * FROM public.تقارير_الاشتباه')
         
         cur.execute(select_query)
