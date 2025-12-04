@@ -88,10 +88,17 @@ def create_final_report_from_db(records, column_names):
     # إضافة عمود الترقيم
     df.insert(0, '#', range(1, len(df) + 1))
     
+# app.py - داخل دالة create_final_report_from_db
+
+# ...
     output = io.BytesIO()
     writer = pd.ExcelWriter(output, engine='xlsxwriter')
-    sheet_name = 'التقرير المالي من قاعدة البيانات'
+    
+    # 💡 التعديل هنا: تقصير اسم ورقة العمل
+    sheet_name = 'التقرير المالي النهائي' 
+    
     df.to_excel(writer, sheet_name=sheet_name, index=False)
+# ...
     
     # تنسيق Excel
     workbook, worksheet = writer.book, writer.sheets[sheet_name]
