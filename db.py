@@ -42,26 +42,35 @@ def save_to_db(extracted_data):
         
         # إعداد البيانات وتحويل الفارغ إلى None/NULL
         processed_data = {}
-        for key in DATA_KEYS:
+        insert_columns = []
+        insert_values = []
+        
+        # نمر على البيانات المستخلصة فقط إذا كانت غير فارغة
+        for key in DATA_KEYS: # DATA_KEYS هي DB_COLUMN_NAMES 
             value = extracted_data.get(key)
-            # التعامل مع أي قيمة فارغة أو غير متوفرة كـ None
-            if value == 'غير متوفر' or value == '' or value is None or pd.isna(value):
+            
+            # 💡 يتم إهمال الأعمدة الفارغة تماماً من استعلام INSERT
+            if value is None or value == 'غير متوفر' or value == '' or pd.isna(value):
+                # إذا كانت القيمة فارغة، نضعها None ليتم تحويلها إلى NULL في SQL
                 processed_data[key] = None
             else:
                 processed_data[key] = value
 
-        # 1. بناء قائمة الأعمدة المقتبسة
-        columns_sql = sql.SQL(', ').join([sql.Identifier(col) for col in DB_COLUMN_NAMES])
-        
-        # 2. بناء قائمة القيم الحرفية (Literals)
-        values_list = sql.SQL(', ').join([sql.Literal(processed_data.get(key)) for key in DATA_KEYS])
+            # نبني قائمة الأعمدة والقيم فقط للعناصر غير الفارغة (للسماح بالقيم الافتراضية)
+            insert_columns.append(sql.Identifier(key))
+            insert_values.append(sql.Literal(processed_data.get(key)))
+            
 
-        # بناء جملة INSERT النهائية باستخدام اسم الجدول الصحيح (باستخدام sql.SQL)
+        # بناء استعلام INSERT الديناميكي
+        columns_sql = sql.SQL(', ').join(insert_columns)
+        values_list = sql.SQL(', ').join(insert_values)
+
+        # بناء جملة INSERT النهائية باستخدام اسم الجدول الصحيح
         insert_query = sql.SQL("""
             INSERT INTO {table_name} ({columns})
             VALUES ({values})
         """).format(
-            table_name=sql.SQL('تقارير_الاشتباه'), # 👈 حل مشكلة الاسم العربي
+            table_name=sql.SQL('تقارير_الاشتباه'), 
             columns=columns_sql,
             values=values_list
         )
@@ -73,37 +82,9 @@ def save_to_db(extracted_data):
         conn.close()
         return True
     except Exception as e:
+        # ⚠️ الآن يجب أن يظهر هذا الخطأ تفاصيل المشكلة (مثل خطأ في التاريخ أو الرقم)
         st.error(f"❌ حدث خطأ أثناء حفظ البيانات: {e}")
         if conn:
             conn.rollback()
             conn.close()
         return False
-
-# دالة جلب كل البيانات من قاعدة البيانات
-def fetch_all_reports():
-    conn = connect_db()
-    if not conn:
-        return None
-
-    try:
-        cur = conn.cursor()
-        
-        select_query = sql.SQL('SELECT * FROM {table_name}').format(
-            table_name=sql.SQL('تقارير_الاشتباه') # 👈 حل مشكلة الاسم العربي
-        )
-
-        cur.execute(select_query)
-        
-        column_names = [desc[0] for desc in cur.description]
-        records = cur.fetchall()
-        
-        cur.close()
-        conn.close()
-        
-        return records, column_names
-
-    except Exception as e:
-        st.error(f"❌ حدث خطأ أثناء جلب البيانات من قاعدة البيانات: {e}")
-        if conn:
-            conn.close()
-        return None
