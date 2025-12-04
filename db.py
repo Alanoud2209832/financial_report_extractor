@@ -97,6 +97,43 @@ def save_to_db(extracted_data):
         return True
     except Exception as e:
         st.error(f"❌ حدث خطأ أثناء حفظ البيانات: {e}")
+        # db.py (إضافة دالة جديدة)
+
+# ... (باقي الكود كما هو، دالة connect_db موجودة)
+
+def fetch_all_reports():
+    conn = connect_db()
+    if not conn:
+        return None
+
+    try:
+        cur = conn.cursor()
+        
+        # نستخدم SELECT لجلب جميع الأعمدة من جدول تقارير_الاشتباه
+        # ونستخدم sql.Identifier لتغليف اسم الجدول
+        select_query = sql.SQL('SELECT * FROM {table_name}').format(
+            table_name=sql.Identifier('تقارير_الاشتباه')
+        )
+
+        cur.execute(select_query)
+        
+        # جلب أسماء الأعمدة (رؤوس الجدول)
+        column_names = [desc[0] for desc in cur.description]
+        
+        # جلب جميع الصفوف
+        records = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        # إرجاع الصفوف وأسماء الأعمدة
+        return records, column_names
+
+    except Exception as e:
+        st.error(f"❌ حدث خطأ أثناء جلب البيانات من قاعدة البيانات: {e}")
+        if conn:
+            conn.close()
+        return None
         # تراجع عن العملية في حالة الخطأ
         if conn:
             conn.rollback()
