@@ -1,4 +1,6 @@
+# -*- coding: utf-8 -*-
 # app.py
+# ... (باقي الكود)
 import streamlit as st
 import pandas as pd
 import json
@@ -9,6 +11,9 @@ from google import genai
 from google.genai.errors import APIError
 from db import save_to_db, fetch_all_reports
 
+# ===============================
+# 1. إعدادات API
+# ... (باقي الكود)
 # ===============================
 # 1. إعدادات API
 # ===============================
