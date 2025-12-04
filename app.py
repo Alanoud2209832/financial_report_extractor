@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 # app.py
-# ... (باقي الكود)
 import streamlit as st
 import pandas as pd
 import json
@@ -13,12 +12,10 @@ from db import save_to_db, fetch_all_reports
 
 # ===============================
 # 1. إعدادات API
-# ... (باقي الكود)
-# ===============================
-# 1. إعدادات API
 # ===============================
 # يفضل تحميل هذا من ملف .env في بيئة الإنتاج
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyBF1UOBTxu5WpTePnVAEHf9ECIUqtq18gI") 
+# **تنبيه**: يرجى استخدام os.getenv("GEMINI_API_KEY") وتجنب وضع المفتاح مباشرة
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyCrzPwjjz7SLMxduGZ9xbO3tqteLDL-wdU") 
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
 SYSTEM_PROMPT = (
     " أنت نظام استخلاص بيانات آلي (OCR/NLP)التعديل هنا: التركيز على الاستخلاص الحرفي والنسخ الدقيق للبيانات، خاصة في الحقول النصية الطويلة."
@@ -79,8 +76,6 @@ def extract_financial_data(file_bytes, file_name, file_type):
         st.error(f"❌ خطأ أثناء الاستخلاص: {e}")
         return None
 
-
-# Excel Export: جلب البيانات من قاعدة البيانات
 def create_final_report_from_db(records, column_names):
     import xlsxwriter
     if not records: 
@@ -121,6 +116,9 @@ def create_final_report_from_db(records, column_names):
 def main():
     st.set_page_config(layout="wide", page_title="أداة استخلاص وتقارير مالية")
 
+    st.title("استخلاص وتقارير مالية مدعومة بالذكاء الاصطناعي 🤖")
+    st.markdown("---")
+
     uploaded_files = st.file_uploader(
         "قم بتحميل الملفات (يمكنك اختيار أكثر من ملف)",
         type=["pdf", "png", "jpg", "jpeg"],
@@ -129,6 +127,10 @@ def main():
 
     if uploaded_files:
         all_extracted_data = []
+
+        # استخدام st.session_state لتخزين البيانات المستخلصة بين مرات إعادة التشغيل
+        if 'extracted_data_df' not in st.session_state:
+            st.session_state['extracted_data_df'] = pd.DataFrame()
 
         if st.button("بدء الاستخلاص"):
             for uploaded_file in uploaded_files:
@@ -140,36 +142,43 @@ def main():
                     all_extracted_data.append(data)
 
             if all_extracted_data:
-                st.subheader("✏️ جميع البيانات المستخلصة (قابلة للتعديل)")
-
-                df = pd.DataFrame(all_extracted_data)
-
-                # إضافة العمودين المضافين في app.py إلى DataFrame المعروض إذا لم يكونا موجودين
-                for col in ["اسم الملف", "وقت الاستخلاص"]:
-                    if col not in df.columns: df[col] = 'غير متوفر'
+                # دمج البيانات الجديدة مع البيانات المخزنة مسبقاً للعرض
+                new_df = pd.DataFrame(all_extracted_data)
                 
                 # ترتيب الأعمدة للعرض
                 display_cols = ["اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
-                df = df.reindex(columns=display_cols, fill_value='غير متوفر')
+                new_df = new_df.reindex(columns=display_cols, fill_value='غير متوفر')
+                
+                # استخدام بيانات الجلسة للعرض
+                st.session_state['extracted_data_df'] = pd.concat([st.session_state['extracted_data_df'], new_df], ignore_index=True)
 
-                edited_df = st.data_editor(
-                    df,
-                    use_container_width=True,
-                    num_rows="dynamic"
-                )
 
-                st.markdown("---")
+        if not st.session_state['extracted_data_df'].empty:
+            st.subheader("✏️ جميع البيانات المستخلصة (قابلة للتعديل)")
 
-                if st.button("✔️ تأكيد وحفظ التعديلات في قاعدة البيانات"):
-                    saved_count = 0
-                    for _, row in edited_df.iterrows():
-                        if save_to_db(dict(row)):
-                            saved_count += 1
-                    
-                    if saved_count > 0:
-                         st.success(f"✅ تم حفظ {saved_count} سجل بنجاح في قاعدة البيانات!")
-                    else:
-                         st.warning("⚠️ لم يتم حفظ أي سجل. تحقق من أخطاء الاتصال أو البيانات.")
+            # عرض جدول البيانات القابل للتعديل
+            edited_df = st.data_editor(
+                st.session_state['extracted_data_df'],
+                use_container_width=True,
+                num_rows="dynamic"
+            )
+
+            st.markdown("---")
+
+            if st.button("✔️ تأكيد وحفظ التعديلات في قاعدة البيانات"):
+                saved_count = 0
+                for _, row in edited_df.iterrows():
+                    # إرسال الصف كقاموس لدالة الحفظ
+                    if save_to_db(dict(row)):
+                        saved_count += 1
+                
+                if saved_count > 0:
+                      st.success(f"✅ تم حفظ {saved_count} سجل بنجاح في قاعدة البيانات!")
+                      # مسح البيانات من الجلسة بعد الحفظ الناجح
+                      st.session_state['extracted_data_df'] = pd.DataFrame()
+                      st.rerun() # إعادة تشغيل التطبيق لعرض الواجهة النظيفة
+                else:
+                      st.warning("⚠️ لم يتم حفظ أي سجل. تحقق من أخطاء الاتصال أو البيانات.")
 
 
     # ----------------------------------------------------
@@ -181,7 +190,7 @@ def main():
     if st.button("⬇️ تحميل تقرير Excel من قاعدة البيانات"):
         report_data = fetch_all_reports()
         
-        if report_data and report_data[0]: # التحقق من وجود سجلات
+        if report_data and report_data[0] is not None: # التحقق من وجود سجلات
             records, column_names = report_data
             
             with st.spinner("⏳ جاري إنشاء ملف Excel من البيانات المحفوظة..."):
