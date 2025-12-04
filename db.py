@@ -1,45 +1,42 @@
-# db.py (الكود المعدل)
+# db.py
 
 import psycopg2
 import os
 from dotenv import load_dotenv
 import streamlit as st
-from psycopg2 import sql # استيراد وحدة sql للمساعدة في التعامل مع المعرفات المعقدة
+from psycopg2 import sql # مهم لاستخدام علامات الاقتباس المزدوجة حول الأسماء العربية
 
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
 
-# قائمة الأسماء الحقيقية للأعمدة في قاعدة البيانات (كما تم إنشاؤها بين علامات الاقتباس)
-# مهم: تم تعديل الاسم الطويل إلى "إجمالي إيداع الدراسة"
+# قائمة الأسماء الحقيقية للأعمدة في قاعدة البيانات (بما في ذلك الحقول المضافة من app.py)
+# تأكد أن هذا الاسم يتطابق مع الاسم الفعلي للعمود المختصر في قاعدتك
 DB_COLUMN_NAMES = [
     "رقم الصادر", "تاريخ الصادر", "اسم المشتبه به", "رقم الهوية",
     "الجنسية", "تاريخ الميلاد الوافد", "تاريخ الدخول", "الحالة الاجتماعية",
     "المهنة", "رقم الجوال", "المدينة", "رصيد الحساب", "الدخل السنوي",
     "رقم الوارد", "تاريخ الوارد", "رقم صاحب العمل/ السجل التجاري",
     "سبب الاشتباه", "تاريخ الدارسة من", "تاريخ الدراسة الى",
-    # يجب أن يتطابق هذا الاسم مع الاسم الذي استخدمته لإنشاء العمود
-    "إجمالي إيداع الدراسة", 
+    "إجمالي إيداع الدراسة", # الاسم المختصر في قاعدة البيانات
     "اسم الملف", 
     "وقت الاستخلاص"
 ]
 
-# قائمة مفاتيح Python في القاموس extracted_data
-# تم تعديل الاسم الطويل ليطابق الاسم الذي يمرره DataFrame (الموجود في app.py)
+# قائمة مفاتيح Python في القاموس extracted_data (كما تأتي من Gemini ومن app.py)
 DATA_KEYS = [
     "رقم الصادر", "تاريخ الصادر", "اسم المشتبه به", "رقم الهوية",
     "الجنسية", "تاريخ الميلاد الوافد", "تاريخ الدخول", "الحالة الاجتماعية",
     "المهنة", "رقم الجوال", "المدينة", "رصيد الحساب", "الدخل السنوي",
     "رقم الوارد", "تاريخ الوارد", "رقم صاحب العمل/ السجل التجاري",
     "سبب الاشتباه", "تاريخ الدارسة من", "تاريخ الدراسة الى",
-    "إجمالي الإيداع على الحساب اثناء الدراسة", # يجب أن يكون هذا هو المفتاح في قاموس Python
+    "إجمالي الإيداع على الحساب اثناء الدراسة", # الاسم الطويل كما في قاموس Python
     "اسم الملف", 
     "وقت الاستخلاص"
 ]
 
-
 def connect_db():
     try:
-        # بعض الاتصالات قد تحتاج إلى تحديد sslmode=require
+        # إضافة sslmode='require' للاتصال الآمن بـ Neon
         conn = psycopg2.connect(DB_URL, sslmode='require') 
         return conn
     except Exception as e:
@@ -50,54 +47,46 @@ def connect_db():
 def save_to_db(extracted_data):
     conn = connect_db()
     if not conn:
-        st.error("❌ فشل الاتصال بقاعدة البيانات. لم يتم حفظ البيانات.")
         return False
     
-    # 1. إعداد البيانات للتمرير (معالجة الاسم الطويل ونوع البيانات)
-    # ننشئ قاموساً جديداً للوسائط يتطابق مفتاحه مع الحقل في Python (DATA_KEYS)
-    # ونقوم بتعديل القيمة الطويلة لتمريرها بشكل صحيح
-    
-    # يجب التأكد من أن المفتاح في القاموس يتطابق مع القائمة DATA_KEYS
-    # الاسم الطويل (كمفتاح في قاموس Python) يجب أن يتطابق مع ما تنتجه دالة Gemini
-    # الاسم القصير (كعمود في SQL) يجب أن يتطابق مع ما تم إنشاؤه في قاعدة البيانات
-
-    # إذا كان الحقل في app.py لا يزال يستخدم الاسم الطويل:
-    if "إجمالي الإيداع على الحساب اثناء الدراسة" in extracted_data:
-        # نقوم بإنشاء نسخة نختصر فيها الاسم ليتطابق مع ما هو مطلوب في Psycopg2
-        # (عادةً لا نحتاج لهذه الخطوة لو كنا نستخدم الأسماء الإنجليزية)
-        data_to_save = extracted_data.copy()
-        
-        # 2. تحويل البيانات (التواريخ والأرقام)
-        # لضمان عدم تمرير السلسلة "غير متوفر" إلى حقول رقمية/تاريخية
-        processed_data = {}
-        for key in DATA_KEYS:
-            value = data_to_save.get(key)
-            # استبدال 'غير متوفر' بـ None ليتم التعامل معها كـ NULL في SQL
-            if value == 'غير متوفر' or value == '' or value is None:
-                processed_data[key] = None
-            else:
-                processed_data[key] = value
-
-    # 3. بناء استعلام INSERT الديناميكي
-    # لضمان وضع علامات الاقتباس المزدوجة حول الأسماء العربية في SQL
-
-    # بناء قائمة الأعمدة (بين علامات اقتباس مزدوجة)
-    columns_sql = [sql.Identifier(col) for col in DB_COLUMN_NAMES]
-    
-    # بناء قائمة المتغيرات (%s أو %(key)s)
-    values_placeholders = [sql.Literal(processed_data.get(key)) for key in DATA_KEYS]
-
-    # بناء جملة INSERT النهائية
-    insert_query = sql.SQL("""
-        INSERT INTO "تقارير_الاشتباه" ({columns})
-        VALUES ({values})
-    """).format(
-        columns=sql.SQL(', ').join(columns_sql),
-        values=sql.SQL(', ').join(values_placeholders)
-    )
-
     try:
         cur = conn.cursor()
+        
+        # 1. إعداد البيانات للتمرير وتحويل القيم الفارغة إلى None/NULL
+        processed_data = {}
+        for key in DATA_KEYS:
+            value = extracted_data.get(key)
+            # التعامل مع الاسم الطويل: نأخذ القيمة من المفتاح الطويل
+            if key == "إجمالي الإيداع على الحساب اثناء الدراسة":
+                 db_key = "إجمالي إيداع الدراسة" # نستخدم المفتاح القصير في DB
+            else:
+                 db_key = key # باقي المفاتيح تتطابق في الاسم القصير والطويل
+
+            # استبدال 'غير متوفر' أو السلاسل الفارغة بـ None (Null في SQL)
+            if value == 'غير متوفر' or value == '' or value is None:
+                processed_data[db_key] = None
+            else:
+                processed_data[db_key] = value
+
+        # 2. بناء استعلام INSERT الديناميكي
+        
+        # قائمة الأعمدة (بين علامات اقتباس مزدوجة)
+        columns_sql = [sql.Identifier(col) for col in DB_COLUMN_NAMES]
+        
+        # قائمة القيم (باستخدام القاموس processed_data)
+        values_list = []
+        for col_name in DB_COLUMN_NAMES:
+            # هنا نستخدم أسماء الأعمدة في قاعدة البيانات (DB_COLUMN_NAMES) لاسترجاع القيمة
+            values_list.append(sql.Literal(processed_data.get(col_name)))
+
+        # بناء جملة INSERT النهائية باستخدام اسم الجدول الصحيح
+        insert_query = sql.SQL("""
+            INSERT INTO "تقارير_الاشتباه" ({columns})
+            VALUES ({values})
+        """).format(
+            columns=sql.SQL(', ').join(columns_sql),
+            values=sql.SQL(', ').join(values_list)
+        )
         
         # تنفيذ الاستعلام
         cur.execute(insert_query)
@@ -108,9 +97,8 @@ def save_to_db(extracted_data):
         return True
     except Exception as e:
         st.error(f"❌ حدث خطأ أثناء حفظ البيانات: {e}")
-        conn.rollback()
-        conn.close()
+        # تراجع عن العملية في حالة الخطأ
+        if conn:
+            conn.rollback()
+            conn.close()
         return False
-
-# تأكد من أنك تستخدم هذا الكود الجديد في ملف db.py 
-# مع استخدام اسم جدول صحيح (مثلاً "تقارير_الاشتباه") في قاعدة البيانات.
