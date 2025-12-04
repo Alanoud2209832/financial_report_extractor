@@ -55,16 +55,15 @@ def save_to_db(extracted_data):
         columns_sql = sql.SQL(', ').join([sql.Identifier(col) for col in DB_COLUMN_NAMES])
         values_list = sql.SQL(', ').join([sql.Literal(processed_data.get(key)) for key in DATA_KEYS])
 
-        # بناء جملة INSERT النهائية باستخدام اسم الجدول الصحيح
-       insert_query = sql.SQL("""
+        insert_query = sql.SQL("""
             INSERT INTO {table_name} ({columns})
             VALUES ({values})
         """).format(
-            table_name=sql.SQL('تقارير_الاشتباه'), # 🌟 التعديل: نستخدم sql.SQL بدلاً من sql.Identifier
+            table_name=sql.SQL('تقارير_الاشتباه'),
             columns=columns_sql,
             values=values_list
         )
-        
+
         cur.execute(insert_query)
         
         conn.commit()
@@ -89,9 +88,10 @@ def fetch_all_reports():
         cur = conn.cursor()
         
         # نستخدم SELECT لجلب جميع الأعمدة من جدول تقارير_الاشتباه
-      select_query = sql.SQL('SELECT * FROM {table_name}').format(
-            table_name=sql.SQL('تقارير_الاشتباه') # 🌟 التعديل: نستخدم sql.SQL بدلاً من sql.Identifier
+        select_query = sql.SQL('SELECT * FROM {table_name}').format(
+            table_name=sql.SQL('تقارير_الاشتباه')
         )
+
 
         cur.execute(select_query)
         
