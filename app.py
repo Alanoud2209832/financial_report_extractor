@@ -1,5 +1,6 @@
+# -*- coding: utf-8 -*-
 # app.py
-# app.py (السطور الأولى يجب أن تبدأ من اليسار)
+# ... (باقي الكود)
 import streamlit as st
 import pandas as pd
 import json
