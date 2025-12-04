@@ -1,4 +1,5 @@
 # app.py
+# app.py (السطور الأولى يجب أن تبدأ من اليسار)
 import streamlit as st
 import pandas as pd
 import json
@@ -7,8 +8,11 @@ import base64
 import os
 from google import genai
 from google.genai.errors import APIError
-from db import save_to_db, fetch_all_reports
+from db import save_to_db, fetch_all_reports  # 🌟 يجب أن يبدأ هذا السطر من اليسار
 
+# ===============================
+# 1. إعدادات API
+# ... (باقي الكود)
 # ===============================
 # 1. إعدادات API
 # ===============================
