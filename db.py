@@ -98,6 +98,14 @@ def clean_data_type(key, value):
                 clean_str = date_str.replace('م', '').strip()
                 parts = clean_str.split('/')
                 
+# ب. محاولة التحويل الهجري
+        if Hijri:
+            try:
+                clean_str = date_str.replace('م', '').strip()
+                
+                # 💡 التعديل هنا: استخدام re.split لتقسيم النص بأي فاصل من الفواصل الشائعة (/, -, .)
+                parts = re.split(r'[/\-.]', clean_str)
+                
                 if len(parts) == 3:
                     y, m, d = [int(re.sub(r'[^\d]', '', p)) for p in parts]
                     
@@ -111,12 +119,11 @@ def clean_data_type(key, value):
                     
             except Exception as he:
                  # في حالة فشل التحويل الهجري الدقيق
-                 st.error(f"❌ خطأ هجري: فشل التحويل '{date_str}' بسبب: {he}")
+                 st.error(f"❌ خطأ هجري داخلي: فشل التحويل '{date_str}' بسبب: {he}")
                  pass
 
         # رسالة الخطأ النهائية التي يجب أن تظهر بوضوح
-        st.error(f"❌ فشل التحويل: القيمة '{value}' في حقل '{key}' غير صالحة كتاريخ.")
-        return None
+    
 
     # 4. القيم الأخرى (VARCHAR/TEXT)
     return value
