@@ -15,7 +15,7 @@ from db import save_to_db, fetch_all_reports
 # ===============================
 # يفضل تحميل هذا من ملف .env في بيئة الإنتاج
 # **تنبيه**: يرجى استخدام os.getenv("GEMINI_API_KEY") وتجنب وضع المفتاح مباشرة
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyBF1UOBTxu5WpTePnVAEHf9ECIUqtq18gI") 
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyC0pYafALxg0E3yV4NchGC03BF-k8hWFf8") 
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
 SYSTEM_PROMPT = (
     " أنت نظام استخلاص بيانات آلي (OCR/NLP)التعديل هنا: التركيز على الاستخلاص الحرفي والنسخ الدقيق للبيانات، خاصة في الحقول النصية الطويلة."
