@@ -70,37 +70,35 @@ def clean_data_type(key, value):
             cleaned_value = arabic_to_english_numbers(str(value))
             temp_val = re.sub(r'[^\d\.,-]', '', cleaned_value)
 
-            # 💡 FIX: منطق التمييز بين فاصل الألوف والفاصل العشري:
-            # نفترض أن آخر فاصلة (نقطة أو فاصلة) هي الفاصلة العشرية، وما قبلها هو فاصل ألوف ويجب إزالته.
+            # 💡 التعديل الحاسم: تحديد الفاصل العشري وإصلاح الأرقام الكبيرة (60,000)
             
-            last_dot = temp_val.rfind('.')
-            last_comma = temp_val.rfind(',')
-            
-            last_separator_index = max(last_dot, last_comma)
+            last_separator_index = max(temp_val.rfind('.'), temp_val.rfind(','))
             
             if last_separator_index != -1:
-                # 1. Isolate the integer part and the decimal part
                 integer_part = temp_val[:last_separator_index]
                 decimal_part = temp_val[last_separator_index+1:]
                 
-                # 2. CRITICAL STEP: Remove ALL separators from the integer part (Treating them as thousands separators)
-                # هذا يحول 6,31 إلى 6.31
-                # ويحول 60,000 إلى 60.000 (التي تصبح 60.0 كفلوت) (ستظل الأرقام الكبيرة تحتاج لليقظة)
-                integer_part = re.sub(r'[,\.]', '', integer_part)
+                # إزالة جميع الفواصل من الجزء الصحيح (تعتبر فواصل ألوف)
+                integer_part = re.sub(r'[,\.]', '', integer_part) 
                 
-                # 3. Recombine using the standard decimal point '.'
-                final_val = f"{integer_part}.{decimal_part}"
+                # إذا كان عدد الأرقام بعد آخر فاصلة أكثر من رقمين (مثلاً 000 أو 150)، فهذا فاصل ألوف، وليس عشري.
+                if len(decimal_part) > 2:
+                    # نعتبر الرقم كاملاً ونحوله إلى عدد صحيح كبير (60000 أو 392150)
+                    final_val = integer_part + decimal_part
+                    final_val = re.sub(r'[^\d\.-]', '', final_val)
+                    return float(final_val)
+                else:
+                    # إذا كان رقمين أو أقل (مثلاً 31)، فهذا فاصل عشري (6.31)
+                    final_val = f"{integer_part}.{decimal_part}"
+                    final_val = re.sub(r'[^\d\.-]', '', final_val)
+                    return float(final_val)
             else:
-                # No separator found
-                final_val = temp_val
+                # لم يتم العثور على فاصل، يفترض أنه عدد صحيح
+                final_val = re.sub(r'[^\d\.-]', '', temp_val)
+                if not final_val:
+                    return None
+                return float(final_val)
 
-            # Final cleanup: Ensure only digits, period, and minus sign remain
-            final_val = re.sub(r'[^\d\.-]', '', final_val)
-            
-            if not final_val or final_val == '.' or final_val == '-':
-                return None
-            
-            return float(final_val)
         except ValueError:
             return None
             
@@ -111,7 +109,7 @@ def clean_data_type(key, value):
         # تحويل الأرقام العربية في التاريخ إلى إنجليزية
         date_str = arabic_to_english_numbers(str(value))
         
-        # 💡 تحسين تنظيف التواريخ: إزالة جميع الأحرف غير الرقمية ما عدا فواصل التاريخ (/, -, .)
+        # تحسين تنظيف التواريخ: إزالة جميع الأحرف غير الرقمية ما عدا فواصل التاريخ (/, -, .)
         clean_str_base = re.sub(r'[^\d/\-.]', '', date_str).strip()
         
         # أ. محاولة تحويل ميلادي مباشر
@@ -129,12 +127,10 @@ def clean_data_type(key, value):
                 
                 if len(parts) == 3:
                     try:
-                        # التأكد من استخلاص الأرقام فقط في كل جزء
                         y, m, d = [int(re.sub(r'[^\d]', '', p)) for p in parts]
                     except ValueError:
-                         return None # فشل استخلاص الأرقام
+                         return None
                     
-                    # معالجة الأخطاء الشائعة في قراءة سنة ١٤٤x 
                     if y >= 400 and y <= 500:
                         y += 1000 
                     elif y >= 900 and y <= 999:
