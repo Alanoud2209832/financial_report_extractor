@@ -10,6 +10,7 @@ import re
 import pytz 
 from google import genai
 from google.genai.errors import APIError
+import time # تم إضافة هذا للاستفادة من خاصية إعادة المحاولة
 from db import save_to_db, fetch_all_reports
 
 # ===============================
@@ -73,8 +74,8 @@ def check_for_suspicion(data):
                 year = int(year_str) if year_str else 0
                 
                 # المعيار: إذا كانت السنة الهجرية غير مكتملة أو خارج النطاق 1400-1500
-                if year < 1400 or year > 1500:
-                    # هذه الحالة ستلتقط 0945/06/20 كـ 945
+                # هذا الشرط يلتقط الأخطاء مثل قراءة 0945 كـ 945
+                if year > 100 and year < 1400: 
                     suspicion_indicator += f"🔴 ({field}: سنة غير طبيعية) "
         except Exception:
             # إذا فشل التحويل بالكامل (مثل القيمة النصية)
@@ -92,43 +93,59 @@ def check_for_suspicion(data):
     return suspicion_indicator.strip() or "✅ سليم"
 
 # ===============================
-# 2. وظائف المعالجة
+# 2. وظائف المعالجة (مع خاصية إعادة المحاولة)
 # ===============================
 def extract_financial_data(file_bytes, file_name, file_type):
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        mime_type = "application/pdf" if file_type=='pdf' else f"image/{'jpeg' if file_type=='jpg' else file_type}"
+    MAX_RETRIES = 3 # تم تعيين الحد الأقصى للمحاولات
+    for attempt in range(MAX_RETRIES):
+        try:
+            client = genai.Client(api_key=GEMINI_API_KEY)
+            mime_type = "application/pdf" if file_type=='pdf' else f"image/{'jpeg' if file_type=='jpg' else file_type}"
 
-        content_parts = [
-            "قم باستخلاص جميع البيانات...",
-            {"inlineData": {"data": base64.b64encode(file_bytes).decode('utf-8'), "mimeType": mime_type}}
-        ]
+            content_parts = [
+                "قم باستخلاص جميع البيانات...",
+                {"inlineData": {"data": base64.b64encode(file_bytes).decode('utf-8'), "mimeType": mime_type}}
+            ]
 
-        config = {
-            "systemInstruction": SYSTEM_PROMPT,
-            "responseMimeType": "application/json",
-            "responseSchema": RESPONSE_SCHEMA
-        }
+            config = {
+                "systemInstruction": SYSTEM_PROMPT,
+                "responseMimeType": "application/json",
+                "responseSchema": RESPONSE_SCHEMA
+            }
 
-        with st.spinner(f"⏳ جاري الاستخلاص من '{file_name}'..."):
-            response = client.models.generate_content(model=MODEL_NAME, contents=content_parts, config=config)
+            with st.spinner(f"⏳ جاري الاستخلاص من '{file_name}' - المحاولة {attempt + 1} / {MAX_RETRIES}..."):
+                response = client.models.generate_content(model=MODEL_NAME, contents=content_parts, config=config)
 
-        extracted_data = json.loads(response.text)
-        extracted_data['اسم الملف'] = file_name
+            extracted_data = json.loads(response.text)
+            extracted_data['اسم الملف'] = file_name
+            
+            # 💡 استخدام المنطقة الزمنية "Asia/Riyadh" (توقيت السعودية)
+            riyadh_tz = pytz.timezone('Asia/Riyadh')
+            extracted_data['وقت الاستخلاص'] = pd.Timestamp.now(tz=riyadh_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+            # إضافة مؤشر التشتت
+            extracted_data['مؤشر التشتت'] = check_for_suspicion(extracted_data) 
+            
+            st.success(f"✅ تم الاستخلاص من '{file_name}' بنجاح!")
+            return extracted_data 
+
+        except APIError as e:
+            # 💡 التعامل مع خطأ 503 (Service Unavailable)
+            if '503 UNAVAILABLE' in str(e) and attempt < MAX_RETRIES - 1:
+                wait_time = 2 ** attempt  # تأخير مضاعف: 1، 2، 4 ثوانٍ
+                st.warning(f"⚠️ خطأ مؤقت 503. سيتم إعادة المحاولة بعد {wait_time} ثوانٍ.")
+                time.sleep(wait_time)
+                continue  # الانتقال إلى المحاولة التالية
+            else:
+                st.error(f"❌ خطأ أثناء الاستخلاص بعد {attempt + 1} محاولات: {e}")
+                return None 
         
-        # 💡 التعديل هنا: استخدام المنطقة الزمنية "Asia/Riyadh" (توقيت السعودية)
-        riyadh_tz = pytz.timezone('Asia/Riyadh')
-        extracted_data['وقت الاستخلاص'] = pd.Timestamp.now(tz=riyadh_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-        # إضافة مؤشر التشتت
-        extracted_data['مؤشر التشتت'] = check_for_suspicion(extracted_data) 
-        
-        st.success(f"✅ تم الاستخلاص من '{file_name}' بنجاح!")
-        return extracted_data
-
-    except Exception as e:
-        st.error(f"❌ خطأ أثناء الاستخلاص: {e}")
-        return None
+        except Exception as e:
+            st.error(f"❌ خطأ غير متوقع أثناء الاستخلاص: {e}")
+            return None
+    
+    # في حال فشل جميع المحاولات
+    return None
 
 def create_final_report_from_db(records, column_names):
     import xlsxwriter
@@ -197,7 +214,7 @@ def main():
             if all_extracted_data:
                 new_df = pd.DataFrame(all_extracted_data)
                 
-                # 💡 إضافة "مؤشر التشتت" للعرض فقط
+                # إضافة "مؤشر التشتت" للعرض فقط
                 display_cols = ["مؤشر التشتت", "اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
                 new_df = new_df.reindex(columns=display_cols, fill_value='غير متوفر')
                 
