@@ -297,59 +297,7 @@ def main():
 
         st.markdown("---")
 
-        # زر الحفظ
-        if st.button("💾 تأكيد وحفظ التعديلات في قاعدة البيانات"):
-            saved_count = 0
-            total_rows = len(edited_df)
-            status_placeholder = st.empty()
-
-            for index, row in edited_df.iterrows():
-                row_data = dict(row)
-
-                # حذف عمود التشتت
-                if 'مؤشر التشتت' in row_data:
-                    del row_data['مؤشر التشتت']
-
-                if save_to_db(row_data):
-                    saved_count += 1
-                else:
-                    status_placeholder.error(f"❌ فشل حفظ السجل رقم {index + 1}.")
-                    break
-
-            if saved_count == total_rows:
-                status_placeholder.success(f"✅ تم حفظ {saved_count} سجل بنجاح!")
-                st.session_state['extracted_data_df'] = pd.DataFrame()
-                st.rerun()
-            else:
-                status_placeholder.warning(f"⚠️ تم حفظ {saved_count} فقط. راجع الأخطاء.")
-
-
-    # ======================================================
-    # 📊 قسم التصدير
-    # ======================================================
-    st.markdown("---")
-    st.subheader("📊 تصدير البيانات النهائية")
-
-    if st.button("⬇️ تحميل تقرير Excel"):
-        report_data = fetch_all_reports()
-
-        if report_data and report_data[0] is not None:
-            records, column_names = report_data
-
-            with st.spinner("📝 جاري إنشاء ملف Excel..."):
-                excel_data_bytes = create_final_report_from_db(records, column_names)
-
-            if excel_data_bytes:
-                st.download_button(
-                    "⬇️ اضغط للتحميل",
-                    data=excel_data_bytes,
-                    file_name="Final_Database_Report.xlsx",
-                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                )
-        else:
-            st.error("❌ لا توجد بيانات في قاعدة البيانات.")
-
-# ----------------------------
+        # ----------------------------
 # قسم: تحليل سريع وسهل للبيانات
 # ----------------------------
 import matplotlib.pyplot as plt
@@ -472,6 +420,60 @@ if 'extracted_data_df' in st.session_state and not st.session_state['extracted_d
         st.download_button("⬇️ تحميل ملخص التحليل (CSV)", data=full_csv, file_name="analysis_summary.csv", mime="text/csv")
     else:
         st.download_button("⬇️ تحميل ملخص التحليل (CSV)", data=export_df.to_csv(index=False, encoding='utf-8-sig'), file_name="analysis_summary.csv", mime="text/csv")
+
+
+    
+        # زر الحفظ
+        if st.button("💾 تأكيد وحفظ التعديلات في قاعدة البيانات"):
+            saved_count = 0
+            total_rows = len(edited_df)
+            status_placeholder = st.empty()
+
+            for index, row in edited_df.iterrows():
+                row_data = dict(row)
+
+                # حذف عمود التشتت
+                if 'مؤشر التشتت' in row_data:
+                    del row_data['مؤشر التشتت']
+
+                if save_to_db(row_data):
+                    saved_count += 1
+                else:
+                    status_placeholder.error(f"❌ فشل حفظ السجل رقم {index + 1}.")
+                    break
+
+            if saved_count == total_rows:
+                status_placeholder.success(f"✅ تم حفظ {saved_count} سجل بنجاح!")
+                st.session_state['extracted_data_df'] = pd.DataFrame()
+                st.rerun()
+            else:
+                status_placeholder.warning(f"⚠️ تم حفظ {saved_count} فقط. راجع الأخطاء.")
+
+
+    # ======================================================
+    # 📊 قسم التصدير
+    # ======================================================
+    st.markdown("---")
+    st.subheader("📊 تصدير البيانات النهائية")
+
+    if st.button("⬇️ تحميل تقرير Excel"):
+        report_data = fetch_all_reports()
+
+        if report_data and report_data[0] is not None:
+            records, column_names = report_data
+
+            with st.spinner("📝 جاري إنشاء ملف Excel..."):
+                excel_data_bytes = create_final_report_from_db(records, column_names)
+
+            if excel_data_bytes:
+                st.download_button(
+                    "⬇️ اضغط للتحميل",
+                    data=excel_data_bytes,
+                    file_name="Final_Database_Report.xlsx",
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+        else:
+            st.error("❌ لا توجد بيانات في قاعدة البيانات.")
 
 
 # تشغيل التطبيق
