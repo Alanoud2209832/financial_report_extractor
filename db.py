@@ -68,28 +68,36 @@ def clean_data_type(key, value):
     if key in numeric_fields:
         try:
             cleaned_value = arabic_to_english_numbers(str(value))
-            
-            # أ. إزالة جميع الأحرف غير الرقمية ما عدا الفواصل والنقطة وعلامة السالب
             temp_val = re.sub(r'[^\d\.,-]', '', cleaned_value)
+
+            # 💡 FIX: منطق التمييز بين فاصل الألوف والفاصل العشري:
+            # نفترض أن آخر فاصلة (نقطة أو فاصلة) هي الفاصلة العشرية، وما قبلها هو فاصل ألوف ويجب إزالته.
             
-            # 💡 تصحيح حاسم: إزالة الفواصل (,) باعتبارها فواصل آلاف، لضمان قراءة الرقم كاملاً.
-            temp_val = temp_val.replace(',', '')
+            last_dot = temp_val.rfind('.')
+            last_comma = temp_val.rfind(',')
             
-            # ج. معالجة النقاط العشرية المتعددة الناتجة عن أخطاء الـ OCR
-            parts = temp_val.split('.')
-            if len(parts) > 2:
-                # ضم الأجزاء الأولى (التي كانت فواصل آلاف خاطئة)، والاحتفاظ بالفاصل العشري الأخير
-                integer_part = "".join(parts[:-1]) 
-                decimal_part = parts[-1] 
+            last_separator_index = max(last_dot, last_comma)
+            
+            if last_separator_index != -1:
+                # 1. Isolate the integer part and the decimal part
+                integer_part = temp_val[:last_separator_index]
+                decimal_part = temp_val[last_separator_index+1:]
+                
+                # 2. CRITICAL STEP: Remove ALL separators from the integer part (Treating them as thousands separators)
+                # هذا يحول 6,31 إلى 6.31
+                # ويحول 60,000 إلى 60.000 (التي تصبح 60.0 كفلوت) (ستظل الأرقام الكبيرة تحتاج لليقظة)
+                integer_part = re.sub(r'[,\.]', '', integer_part)
+                
+                # 3. Recombine using the standard decimal point '.'
                 final_val = f"{integer_part}.{decimal_part}"
             else:
+                # No separator found
                 final_val = temp_val
-            
-            # د. تنظيف نهائي للتأكد من بقاء الأرقام والنقطة وعلامة السالب فقط
+
+            # Final cleanup: Ensure only digits, period, and minus sign remain
             final_val = re.sub(r'[^\d\.-]', '', final_val)
             
-            # التحقق من أن القيمة ليست فارغة بعد التنظيف
-            if not final_val or final_val == '.':
+            if not final_val or final_val == '.' or final_val == '-':
                 return None
             
             return float(final_val)
@@ -109,7 +117,6 @@ def clean_data_type(key, value):
         # أ. محاولة تحويل ميلادي مباشر
         try:
             date_obj = pd.to_datetime(clean_str_base, errors='coerce', dayfirst=False)
-            # نتحقق من أن السنة ميلادية (> 1800) لتجنب الخلط مع التواريخ الهجرية
             if pd.notna(date_obj) and date_obj.year > 1800:
                 return date_obj.date()
         except Exception:
@@ -121,14 +128,17 @@ def clean_data_type(key, value):
                 parts = re.split(r'[/\-.]', clean_str_base)
                 
                 if len(parts) == 3:
-                    # التأكد من استخلاص الأرقام فقط في كل جزء
-                    y, m, d = [int(re.sub(r'[^\d]', '', p)) for p in parts]
+                    try:
+                        # التأكد من استخلاص الأرقام فقط في كل جزء
+                        y, m, d = [int(re.sub(r'[^\d]', '', p)) for p in parts]
+                    except ValueError:
+                         return None # فشل استخلاص الأرقام
                     
                     # معالجة الأخطاء الشائعة في قراءة سنة ١٤٤x 
                     if y >= 400 and y <= 500:
-                        y += 1000 # (مثال: 445 -> 1445)
+                        y += 1000 
                     elif y >= 900 and y <= 999:
-                        y = 1400 + (y % 100) # (مثال: 945 -> 1445)
+                        y = 1400 + (y % 100)
                         
                     
                     if y > 1300 and y < 1500:
@@ -156,7 +166,6 @@ def save_to_db(extracted_data):
         insert_columns = []
         insert_values = []
         
-        # نستخدم DATA_KEYS لضمان عدم محاولة إدخال 'مؤشر التشتت'
         for key in DATA_KEYS:
             value = extracted_data.get(key)
             
@@ -184,7 +193,6 @@ def save_to_db(extracted_data):
         conn.close()
         return True
     except Exception as e:
-        # هذه الرسالة ستظهر الآن بوضوح لأن app.py سيتوقف عند أول خطأ حفظ
         st.error(f"❌ حدث خطأ أثناء حفظ البيانات: {e}")
         if conn:
             conn.rollback()
