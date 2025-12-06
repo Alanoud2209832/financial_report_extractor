@@ -67,19 +67,33 @@ def clean_data_type(key, value):
     numeric_fields = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
     if key in numeric_fields:
         try:
-            # 1. تحويل الأرقام العربية
             cleaned_value = arabic_to_english_numbers(str(value)) 
             
-            # 2. إزالة النص غير الرقمي (مثل 'ريال') قبل التعامل مع الفواصل
-            cleaned_value = re.sub(r'[^\d\.,-]', '', cleaned_value)
+            # إزالة النص غير الرقمي مع الاحتفاظ بجميع الفواصل
+            temp_val = re.sub(r'[^\d\.,-]', '', cleaned_value)
             
-            # 3. إزالة فواصل الألوف (العربية والإنجليزية)
-            # مثال: '293,436' تصبح '293436' (مما يحل مشكلة القراءة الخاطئة)
-            cleaned_value = cleaned_value.replace('،', '').replace(',', '')
+            # 3. Standardize Decimal/Thousands (CRITICAL FIX)
             
-            # 4. التنظيف النهائي (يجب أن يبقى فقط الأرقام والنقطة العشرية)
+            # إيجاد مؤشر آخر فاصلة (نقطة أو فاصلة عادية أو فاصلة عربية)
+            last_separator_index = max(temp_val.rfind('.'), temp_val.rfind(','), temp_val.rfind('،'))
+            
+            if last_separator_index != -1:
+                # 1. عزل الجزء الصحيح والجزء العشري بناءً على آخر فاصلة
+                integer_part = temp_val[:last_separator_index]
+                decimal_part = temp_val[last_separator_index+1:]
+                
+                # 2. تنظيف الجزء الصحيح (حذف جميع الفواصل منه واعتبارها ألوف)
+                integer_part = re.sub(r'[^\d]', '', integer_part)
+                
+                # 3. إعادة دمج الرقم باستخدام النقطة ('.') كفاصل عشري قياسي لـ PostgreSQL
+                cleaned_value = f"{integer_part}.{decimal_part}"
+            else:
+                # لم يتم العثور على فواصل، فقط حذف الأحرف غير الرقمية
+                cleaned_value = re.sub(r'[^\d]', '', temp_val)
+            
+            # 4. تنظيف نهائي (للتأكد من بقاء الأرقام والنقطة فقط)
             cleaned_value = re.sub(r'[^\d\.]', '', cleaned_value)
-            
+
             # 5. معالجة النقاط العشرية المتعددة
             if cleaned_value.count('.') > 1:
                  parts = cleaned_value.split('.')
