@@ -296,7 +296,7 @@ def main():
         )
 
         st.markdown("---")
-    
+
         # زر الحفظ
         if st.button("💾 تأكيد وحفظ التعديلات في قاعدة البيانات"):
             saved_count = 0
@@ -323,10 +323,6 @@ def main():
             else:
                 status_placeholder.warning(f"⚠️ تم حفظ {saved_count} فقط. راجع الأخطاء.")
 
-    # ----------------------------------------------------
-    # قسم التحليلات الجديد
-    # ----------------------------------------------------
-    display_analytics()
 
     # ======================================================
     # 📊 قسم التصدير
@@ -352,85 +348,131 @@ def main():
                 )
         else:
             st.error("❌ لا توجد بيانات في قاعدة البيانات.")
-# الإضافة الجديدة في ملف app.py
 
-def display_analytics():
-    st.markdown("---")
-    st.subheader("تحليلات البيانات الرئيسية 📊")
-    
-    # استدعاء دالة جلب السجلات من قاعدة البيانات
-    report_data = fetch_all_reports()
-    if not report_data or not report_data[0]:
-        st.info("لا توجد بيانات كافية في قاعدة البيانات لعرض التحليلات.")
-        return
+# ----------------------------
+# قسم: تحليل سريع وسهل للبيانات
+# ----------------------------
+import matplotlib.pyplot as plt
+from io import BytesIO
 
-    records, column_names = report_data
-    df = pd.DataFrame(records, columns=column_names)
-    
-    # تحويل الأعمدة المالية إلى أرقام
-    numeric_cols = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
-    for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-    
-    # تنظيف البيانات للتحليل (إزالة السجلات التي لا تحتوي على أي قيمة مالية)
-    df_clean = df[(df['إجمالي إيداع الدراسة'] > 0) | (df['الدخل السنوي'] > 0)].copy() 
-    
-    if df_clean.empty:
-        st.info("البيانات المحفوظة لا تحتوي على قيم مالية لتحليلها.")
-        return
+def safe_to_numeric(series):
+    """حوّل قيم (قد تكون بالعربية) إلى أرقام float بأمان."""
+    def conv(v):
+        if pd.isna(v): 
+            return None
+        s = str(v).strip()
+        s = arabic_to_english_numbers(s)
+        # إزالة فواصل آلاف شائعة (، ,) واستبدال الفاصلة العشرية إن وجدت
+        s = s.replace(',', '').replace('،', '')
+        s = s.replace('٫', '.').replace(' ', '')
+        # إزالة أي رموز عملة
+        s = re.sub(r'[^\d.\-]', '', s)
+        try:
+            return float(s) if s != '' else None
+        except:
+            return None
+    return series.apply(conv)
 
-    st.markdown("---")
-    
-    ## 1. مؤشرات التستر التجاري (التشتت المالي)
-    st.markdown("#### مؤشرات التشتت المالي (لتقييم الاشتباه)")
-    
-    # حساب نسبة الإيداع إلى الدخل
-    df_clean['نسبة الإيداع للداخل'] = df_clean.apply(
-        lambda row: row['إجمالي إيداع الدراسة'] / row['الدخل السنوي'] if row['الدخل السنوي'] != 0 else 100,
-        axis=1
-    )
-    
-    avg_ratio = df_clean['نسبة الإيداع للداخل'].mean()
-    
-    col1, col2, col3 = st.columns(3)
-    
-    col1.metric(
-        label="متوسط نسبة إيداع الدراسة إلى الدخل السنوي", 
-        value=f"{avg_ratio:.2f}",
-        help="نسبة أعلى من 1.0 (100%) تعزز الاشتباه بوجود مصدر دخل غير معلن."
-    )
-
-    col2.metric(
-        label="إجمالي الإيداعات المشتبه بها (ملايين الريالات)", 
-        value=f"{df_clean['إجمالي إيداع الدراسة'].sum() / 1_000_000:.2f}M",
-    )
-    
-    col3.metric(
-        label="عدد السجلات المشمولة بالتحليل", 
-        value=len(df_clean),
-    )
+if 'extracted_data_df' in st.session_state and not st.session_state['extracted_data_df'].empty:
+    df_for_analysis = st.session_state['extracted_data_df'].copy()
 
     st.markdown("---")
+    st.subheader("📈 تحليل سريع ومبسط للبيانات")
 
-    ## 2. التحليل حسب الجنسية والمهنة
-    
-    # التحليل حسب الجنسية
-    nationality_analysis = df_clean.groupby('الجنسية').agg(
-        Total_Deposit=('إجمالي إيداع الدراسة', 'sum'),
-        Count=('الجنسية', 'count')
-    ).reset_index().sort_values(by='Total_Deposit', ascending=False).head(10)
-    
-    st.markdown("##### الإيداعات الإجمالية حسب الجنسية (أعلى 10)")
-    st.bar_chart(nationality_analysis, x='الجنسية', y='Total_Deposit')
-    
-    # التحليل حسب المهنة
-    profession_analysis = df_clean.groupby('المهنة').agg(
-        Average_Deposit=('إجمالي إيداع الدراسة', 'mean'),
-        Count=('المهنة', 'count')
-    ).reset_index().sort_values(by='Count', ascending=False).head(10)
+    # ------- مؤشرات سريعة (KPI) -------
+    total_records = len(df_for_analysis)
+    total_files = df_for_analysis['اسم الملف'].nunique() if 'اسم الملف' in df_for_analysis.columns else 'غير معروف'
+    # حساب المشكوك فيه من مؤشر التشتت إذا موجود
+    if 'مؤشر التشتت' in df_for_analysis.columns:
+        suspicious_mask = df_for_analysis['مؤشر التشتت'].astype(str).str.contains('🔴|⚠️')
+        suspicious_count = suspicious_mask.sum()
+    else:
+        suspicious_count = 0
 
-    st.markdown("##### متوسط الإيداع حسب المهنة (أكثر المهن تكراراً)")
-    st.bar_chart(profession_analysis, x='المهنة', y='Average_Deposit')
+    k1, k2, k3 = st.columns(3)
+    k1.metric("إجمالي السجلات", total_records)
+    k2.metric("عدد الملفات", total_files)
+    k3.metric("سجلات مشكوك فيها", suspicious_count)
+
+    st.markdown("")
+
+    # ------- رسم: حالة مؤشر التشتت (دائري) -------
+    if 'مؤشر التشتت' in df_for_analysis.columns:
+        status_counts = df_for_analysis['مؤشر التشتت'].fillna('غير متوفر').value_counts()
+        fig1, ax1 = plt.subplots(figsize=(4,4))
+        ax1.pie(status_counts.values, labels=status_counts.index, autopct='%1.1f%%', startangle=90, wedgeprops={'edgecolor': 'white'})
+        ax1.axis('equal')
+        st.pyplot(fig1)
+        plt.close(fig1)
+
+    # ------- رسم: أكثر الجنسيات (شريطي) -------
+    if 'الجنسية' in df_for_analysis.columns:
+        top_nationalities = df_for_analysis['الجنسية'].fillna('غير معروف').value_counts().nlargest(8)
+        fig2, ax2 = plt.subplots(figsize=(7,4))
+        top_nationalities.plot(kind='bar', ax=ax2)
+        ax2.set_title("أكثر الجنسيات ظهوراً")
+        ax2.set_xlabel("")
+        ax2.set_ylabel("عدد السجلات")
+        plt.tight_layout()
+        st.pyplot(fig2)
+        plt.close(fig2)
+
+    # ------- رسم: توزيع رصيد الحساب (هيستوغرام) -------
+    if 'رصيد الحساب' in df_for_analysis.columns:
+        numeric_balance = safe_to_numeric(df_for_analysis['رصيد الحساب'])
+        if numeric_balance.dropna().empty:
+            st.info("لا توجد قيم رقمية لعمود 'رصيد الحساب' لعرض الرسم.")
+        else:
+            fig3, ax3 = plt.subplots(figsize=(7,4))
+            ax3.hist(numeric_balance.dropna(), bins=20)
+            ax3.set_title("توزيع رصيد الحساب")
+            ax3.set_xlabel("الرصيد")
+            ax3.set_ylabel("تردد")
+            plt.tight_layout()
+            st.pyplot(fig3)
+            plt.close(fig3)
+
+    # ------- جدول: أعلى 10 سجلات مشكوك فيها -------
+    if 'مؤشر التشتت' in df_for_analysis.columns:
+        suspicious_df = df_for_analysis[suspicious_mask].copy()
+        if not suspicious_df.empty:
+            st.markdown("**⚠️ ملخص السجلات المشكوك فيها (أعلى 10):**")
+            st.dataframe(suspicious_df.head(10))
+        else:
+            st.info("لا توجد سجلات مشكوك فيها لعرضها.")
+
+    # ------- زر لتحميل ملخص التحليل كملف CSV -------
+    summary = {
+        "إجمالي السجلات": [total_records],
+        "عدد الملفات": [total_files],
+        "سجلات مشكوك فيها": [suspicious_count]
+    }
+    summary_df = pd.DataFrame(summary)
+
+    csv_buffer = BytesIO()
+    combined_for_export = {
+        "summary": summary_df,
+        "top_nationalities": df_for_analysis['الجنسية'].value_counts().head(20) if 'الجنسية' in df_for_analysis.columns else pd.Series(dtype=int),
+        "suspicious_samples": suspicious_df.head(50) if 'الجنسية' in df_for_analysis.columns else pd.DataFrame()
+    }
+    # لتصدير: سنصدر فقط summary و top_nationalities و أول 50 مشكوك
+    # نُصدر كـ CSV واحد (summary + top nationalities + suspects)
+    export_df = pd.DataFrame()
+    # إضافة summary
+    export_df = pd.concat([export_df, summary_df], axis=1)
+    # إضافة top_nationalities في أعمدة إضافية (إن وُجِد)
+    if 'الجنسية' in df_for_analysis.columns:
+        tn = df_for_analysis['الجنسية'].value_counts().reset_index()
+        tn.columns = ['الجنسية', 'العدد']
+        # نحرص على تحويلها إلى CSV منفصل بالأسفل
+        combined_csv = export_df.to_csv(index=False, encoding='utf-8-sig')
+        tn_csv = tn.to_csv(index=False, encoding='utf-8-sig')
+        suspects_csv = suspicious_df.head(200).to_csv(index=False, encoding='utf-8-sig')
+        full_csv = "### summary\n" + combined_csv + "\n\n### top_nationalities\n" + tn_csv + "\n\n### suspicious_samples\n" + suspects_csv
+        st.download_button("⬇️ تحميل ملخص التحليل (CSV)", data=full_csv, file_name="analysis_summary.csv", mime="text/csv")
+    else:
+        st.download_button("⬇️ تحميل ملخص التحليل (CSV)", data=export_df.to_csv(index=False, encoding='utf-8-sig'), file_name="analysis_summary.csv", mime="text/csv")
+
 
 # تشغيل التطبيق
 if __name__ == "__main__":
