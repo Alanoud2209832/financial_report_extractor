@@ -6,6 +6,7 @@ import json
 import io
 import base64
 import os
+import re # 💡 تم إضافة re
 from google import genai
 from google.genai.errors import APIError
 from db import save_to_db, fetch_all_reports
@@ -45,6 +46,54 @@ RESPONSE_SCHEMA = {
 # ===============================
 # 2. وظائف المعالجة
 # ===============================
+
+# 💡 دالة مساعدة لتحويل الأرقام العربية إلى إنجليزية
+def arabic_to_english_numbers(text):
+    if not isinstance(text, str):
+        return text
+    arabic_map = {'٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
+                  '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9'}
+    return text.translate(str.maketrans(arabic_map))
+
+# 💡 دالة التحقق من التشتت (المؤشر)
+def check_for_suspicion(data):
+    """يضيف علامة 'مؤشر التشتت' (🔴) للبيانات المشكوك فيها."""
+    suspicion_indicator = ""
+    
+    # --- 1. التحقق من التواريخ الهجرية (المثال: 0945/06/20) ---
+    date_fields = ["تاريخ الصادر", "تاريخ الوارد"]
+    for field in date_fields:
+        date_val = data.get(field, "")
+        try:
+            # تنظيف الأرقام العربية وتحويلها إلى إنجليزية
+            date_str_en = arabic_to_english_numbers(str(date_val))
+            
+            # محاولة استخراج السنة باستخدام فواصل متعددة
+            parts = re.split(r'[/\-.]', date_str_en)
+            if len(parts) == 3:
+                # إزالة أي أحرف غير رقمية من الجزء الأول (السنة)
+                year_str = re.sub(r'[^\d]', '', parts[0])
+                year = int(year_str) if year_str else 0
+                
+                # المعيار: إذا كانت السنة الهجرية غير مكتملة أو خارج النطاق 1400-1500
+                if year < 1400 or year > 1500:
+                    suspicion_indicator += f"🔴 ({field}: سنة غير طبيعية) "
+        except Exception:
+            # إذا فشل التحويل بالكامل (مثل القيمة النصية)
+            if str(date_val).strip() not in ['غير متوفر', '']:
+                 suspicion_indicator += f"🔴 ({field}: صيغة غير مفهومة) "
+            pass
+
+    # --- 2. التحقق من القيم المالية المستخلصة كصفر ---
+    financial_fields = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
+    for field in financial_fields:
+        val = data.get(field, "")
+        if str(val).strip() in ['0', '0.00', '٠', '٠,٠٠']:
+             suspicion_indicator += f"⚠️ ({field} = 0) "
+
+    return suspicion_indicator.strip() or "✅ سليم"
+
+
 def extract_financial_data(file_bytes, file_name, file_type):
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
@@ -67,6 +116,10 @@ def extract_financial_data(file_bytes, file_name, file_type):
         extracted_data = json.loads(response.text)
         extracted_data['اسم الملف'] = file_name
         extracted_data['وقت الاستخلاص'] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # 💡 الخطوة الجديدة: إضافة مؤشر التشتت
+        extracted_data['مؤشر التشتت'] = check_for_suspicion(extracted_data) 
+        
         st.success(f"✅ تم الاستخلاص من '{file_name}' بنجاح!")
         return extracted_data
 
@@ -141,7 +194,8 @@ def main():
             if all_extracted_data:
                 new_df = pd.DataFrame(all_extracted_data)
                 
-                display_cols = ["اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
+                # 💡 التعديل هنا: إضافة "مؤشر التشتت" للعرض فقط
+                display_cols = ["مؤشر التشتت", "اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
                 new_df = new_df.reindex(columns=display_cols, fill_value='غير متوفر')
                 
                 st.session_state['extracted_data_df'] = pd.concat([st.session_state['extracted_data_df'], new_df], ignore_index=True)
@@ -158,14 +212,21 @@ def main():
 
             st.markdown("---")
 
-            # 💡 التعديل هنا: لضمان بقاء رسائل الخطأ والجدول في حال الفشل
+            # 💡 منطق الحفظ والتوقف عند أول خطأ
             if st.button("✔️ تأكيد وحفظ التعديلات في قاعدة البيانات"):
                 saved_count = 0
                 total_rows = len(edited_df)
                 status_placeholder = st.empty() 
 
                 for index, row in edited_df.iterrows():
-                    if save_to_db(dict(row)):
+                    # 💡 تحويل الصف إلى قاموس
+                    row_data = dict(row)
+                    
+                    # 💡 الخطوة الحاسمة: حذف عمود "مؤشر التشتت" قبل الحفظ
+                    if 'مؤشر التشتت' in row_data:
+                        del row_data['مؤشر التشتت']
+                        
+                    if save_to_db(row_data): # تمرير القاموس النظيف
                         saved_count += 1
                     else:
                         status_placeholder.error(f"❌ فشل الحفظ عند السجل رقم {index + 1}. تم إيقاف العملية.")
@@ -173,6 +234,7 @@ def main():
 
                 if saved_count == total_rows:
                     status_placeholder.success(f"✅ تم حفظ {saved_count} سجل بنجاح في قاعدة البيانات!")
+                    # مسح البيانات من الجلسة بعد الحفظ الناجح
                     st.session_state['extracted_data_df'] = pd.DataFrame()
                     st.rerun() 
                 elif saved_count > 0:
