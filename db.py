@@ -3,16 +3,16 @@ import psycopg2
 import os
 from dotenv import load_dotenv
 import streamlit as st
-from psycopg2 import sql 
-import pandas as pd 
-import re 
+from psycopg2 import sql
+import pandas as pd
+import re
 
 # محاولة استيراد مكتبة التحويل الهجري
 try:
     from hijri_converter import Hijri
 except ImportError:
     st.warning("⚠️ مكتبة hijri-converter غير مثبتة. التواريخ الهجرية قد لا يتم تحويلها بشكل صحيح.")
-    Hijri = None 
+    Hijri = None
 
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
@@ -25,11 +25,11 @@ DB_COLUMN_NAMES = [
     "رقم الوارد", "تاريخ الوارد", "رقم صاحب العمل/ السجل التجاري",
     "سبب الاشتباه", "تاريخ الدارسة من", "تاريخ الدراسة الى",
     "إجمالي إيداع الدراسة",
-    "اسم الملف", 
+    "اسم الملف",
     "وقت الاستخلاص"
 ]
 
-DATA_KEYS = DB_COLUMN_NAMES 
+DATA_KEYS = DB_COLUMN_NAMES
 
 # دالة مساعدة لتحويل الأرقام العربية إلى إنجليزية
 def arabic_to_english_numbers(text):
@@ -49,10 +49,10 @@ def connect_db():
         if not DB_URL:
             st.error("❌ متغير DATABASE_URL غير موجود. يرجى مراجعة ملف .env")
             return None
-        conn = psycopg2.connect(DB_URL, sslmode='require') 
+        conn = psycopg2.connect(DB_URL, sslmode='require')
         return conn
     except Exception as e:
-        st.error(f"❌ فشل الاتصال بقاعدة البيانات: {e}") 
+        st.error(f"❌ فشل الاتصال بقاعدة البيانات: {e}")
         return None
 
 
@@ -67,39 +67,32 @@ def clean_data_type(key, value):
     numeric_fields = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
     if key in numeric_fields:
         try:
-            cleaned_value = arabic_to_english_numbers(str(value)) 
+            cleaned_value = arabic_to_english_numbers(str(value))
             
-            # إزالة النص غير الرقمي مع الاحتفاظ بجميع الفواصل
+            # أ. إزالة جميع الأحرف غير الرقمية ما عدا الفواصل والنقطة وعلامة السالب
             temp_val = re.sub(r'[^\d\.,-]', '', cleaned_value)
             
-            # 3. Standardize Decimal/Thousands (CRITICAL FIX)
+            # 💡 تصحيح حاسم: إزالة الفواصل (,) باعتبارها فواصل آلاف، لضمان قراءة الرقم كاملاً.
+            temp_val = temp_val.replace(',', '')
             
-            # إيجاد مؤشر آخر فاصلة (نقطة أو فاصلة عادية أو فاصلة عربية)
-            last_separator_index = max(temp_val.rfind('.'), temp_val.rfind(','), temp_val.rfind('،'))
-            
-            if last_separator_index != -1:
-                # 1. عزل الجزء الصحيح والجزء العشري بناءً على آخر فاصلة
-                integer_part = temp_val[:last_separator_index]
-                decimal_part = temp_val[last_separator_index+1:]
-                
-                # 2. تنظيف الجزء الصحيح (حذف جميع الفواصل منه واعتبارها ألوف)
-                integer_part = re.sub(r'[^\d]', '', integer_part)
-                
-                # 3. إعادة دمج الرقم باستخدام النقطة ('.') كفاصل عشري قياسي لـ PostgreSQL
-                cleaned_value = f"{integer_part}.{decimal_part}"
+            # ج. معالجة النقاط العشرية المتعددة الناتجة عن أخطاء الـ OCR
+            parts = temp_val.split('.')
+            if len(parts) > 2:
+                # ضم الأجزاء الأولى (التي كانت فواصل آلاف خاطئة)، والاحتفاظ بالفاصل العشري الأخير
+                integer_part = "".join(parts[:-1]) 
+                decimal_part = parts[-1] 
+                final_val = f"{integer_part}.{decimal_part}"
             else:
-                # لم يتم العثور على فواصل، فقط حذف الأحرف غير الرقمية
-                cleaned_value = re.sub(r'[^\d]', '', temp_val)
+                final_val = temp_val
             
-            # 4. تنظيف نهائي (للتأكد من بقاء الأرقام والنقطة فقط)
-            cleaned_value = re.sub(r'[^\d\.]', '', cleaned_value)
-
-            # 5. معالجة النقاط العشرية المتعددة
-            if cleaned_value.count('.') > 1:
-                 parts = cleaned_value.split('.')
-                 cleaned_value = "".join(parts[:-1]) + "." + parts[-1]
-
-            return float(cleaned_value)
+            # د. تنظيف نهائي للتأكد من بقاء الأرقام والنقطة وعلامة السالب فقط
+            final_val = re.sub(r'[^\d\.-]', '', final_val)
+            
+            # التحقق من أن القيمة ليست فارغة بعد التنظيف
+            if not final_val or final_val == '.':
+                return None
+            
+            return float(final_val)
         except ValueError:
             return None
             
@@ -110,10 +103,14 @@ def clean_data_type(key, value):
         # تحويل الأرقام العربية في التاريخ إلى إنجليزية
         date_str = arabic_to_english_numbers(str(value))
         
+        # 💡 تحسين تنظيف التواريخ: إزالة جميع الأحرف غير الرقمية ما عدا فواصل التاريخ (/, -, .)
+        clean_str_base = re.sub(r'[^\d/\-.]', '', date_str).strip()
+        
         # أ. محاولة تحويل ميلادي مباشر
         try:
-            date_obj = pd.to_datetime(date_str, errors='coerce', dayfirst=False)
-            if pd.notna(date_obj):
+            date_obj = pd.to_datetime(clean_str_base, errors='coerce', dayfirst=False)
+            # نتحقق من أن السنة ميلادية (> 1800) لتجنب الخلط مع التواريخ الهجرية
+            if pd.notna(date_obj) and date_obj.year > 1800:
                 return date_obj.date()
         except Exception:
             pass
@@ -121,30 +118,25 @@ def clean_data_type(key, value):
         # ب. محاولة التحويل الهجري
         if Hijri:
             try:
-                clean_str = date_str.replace('م', '').strip()
-                
-                # استخدام re.split لتقسيم النص بأي فاصل من الفواصل الشائعة (/, -, .)
-                parts = re.split(r'[/\-.]', clean_str)
+                parts = re.split(r'[/\-.]', clean_str_base)
                 
                 if len(parts) == 3:
+                    # التأكد من استخلاص الأرقام فقط في كل جزء
                     y, m, d = [int(re.sub(r'[^\d]', '', p)) for p in parts]
                     
-                    # 💡 معالجة الأخطاء الشائعة في قراءة سنة ١٤٤x (حل مشكلة ٠٩٤٥)
-                    # 1. إذا كانت السنة 4xx (المشكلة الشائعة بحذف '1')
+                    # معالجة الأخطاء الشائعة في قراءة سنة ١٤٤x 
                     if y >= 400 and y <= 500:
                         y += 1000 # (مثال: 445 -> 1445)
-                    # 2. إذا كانت السنة 9xx (المشكلة التي أبلغ عنها المستخدم: 0945 بدلاً من 1445)
                     elif y >= 900 and y <= 999:
-                        # نفترض أن الخطأ في قراءة القرن، ونحوله إلى القرن الحالي (14xx)
-                        y = 1400 + (y % 100) # (مثال: 945 -> 1400 + 45 = 1445)
+                        y = 1400 + (y % 100) # (مثال: 945 -> 1445)
                         
                     
-                    if y > 1300 and y < 1500: 
+                    if y > 1300 and y < 1500:
                         gregorian_date = Hijri(y, m, d).to_gregorian()
                         return gregorian_date.date()
                     
             except Exception:
-                 pass
+                pass
 
         return None
 
@@ -164,7 +156,7 @@ def save_to_db(extracted_data):
         insert_columns = []
         insert_values = []
         
-        # نستخدم DATA_KEYS (التي هي DB_COLUMN_NAMES) لضمان عدم محاولة إدخال 'مؤشر التشتت'
+        # نستخدم DATA_KEYS لضمان عدم محاولة إدخال 'مؤشر التشتت'
         for key in DATA_KEYS:
             value = extracted_data.get(key)
             
@@ -203,7 +195,7 @@ def fetch_all_reports():
     """يجلب جميع السجلات من جدول تقارير_الاشتباه."""
     conn = connect_db()
     if not conn:
-        return None, None 
+        return None, None
 
     try:
         cur = conn.cursor()
