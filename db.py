@@ -11,7 +11,7 @@ import re
 try:
     from hijri_converter import Hijri
 except ImportError:
-    st.warning("⚠️ مكتبة hijri-converter غير مثبتة. التواريخ الهجرية قد لا يتم تحويلها بشكل صحيح.")
+    st.warning("⚠️ مكتبة hijri-converter غير مثبتة. التواريخ الهجرية قد لا يتم تحويلها بشكل صحيح. يرجى تثبيتها عبر 'pip install hijri-converter'.")
     Hijri = None
 
 load_dotenv()
@@ -70,7 +70,7 @@ def clean_data_type(key, value):
             cleaned_value = arabic_to_english_numbers(str(value))
             temp_val = re.sub(r'[^\d\.,-]', '', cleaned_value)
 
-            # 💡 التعديل الحاسم: تحديد الفاصل العشري وإصلاح الأرقام الكبيرة (60,000)
+            # التعديل الحاسم: تحديد الفاصل العشري وإصلاح الأرقام الكبيرة (60,000)
             
             last_separator_index = max(temp_val.rfind('.'), temp_val.rfind(','))
             
