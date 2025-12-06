@@ -11,7 +11,8 @@ import re
 try:
     from hijri_converter import Hijri
 except ImportError:
-    st.warning("⚠️ مكتبة hijri-converter غير مثبتة. التواريخ الهجرية قد لا يتم تحويلها بشكل صحيح. يرجى تثبيتها عبر 'pip install hijri-converter'.")
+    # سيظهر هذا التحذير في واجهة Streamlit إذا لم يتمكن من تحميل المكتبة
+    st.warning("⚠️ مكتبة hijri-converter غير متوفرة. التواريخ الهجرية قد لا يتم تحويلها بشكل صحيح. يرجى تثبيتها عبر 'pip install hijri-converter'.")
     Hijri = None
 
 load_dotenv()
@@ -63,37 +64,32 @@ def clean_data_type(key, value):
     if value is None or value == 'غير متوفر' or value == '' or pd.isna(value):
         return None
 
-    # 2. تحويل الأعمدة الرقمية (NUMERIC)
+    # 2. تحويل الأعمدة الرقمية (NUMERIC) - تم حل مشكلة الأرقام الكبيرة والصغيرة هنا
     numeric_fields = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
     if key in numeric_fields:
         try:
             cleaned_value = arabic_to_english_numbers(str(value))
             temp_val = re.sub(r'[^\d\.,-]', '', cleaned_value)
 
-            # التعديل الحاسم: تحديد الفاصل العشري وإصلاح الأرقام الكبيرة (60,000)
-            
             last_separator_index = max(temp_val.rfind('.'), temp_val.rfind(','))
             
             if last_separator_index != -1:
                 integer_part = temp_val[:last_separator_index]
                 decimal_part = temp_val[last_separator_index+1:]
                 
-                # إزالة جميع الفواصل من الجزء الصحيح (تعتبر فواصل ألوف)
                 integer_part = re.sub(r'[,\.]', '', integer_part) 
                 
-                # إذا كان عدد الأرقام بعد آخر فاصلة أكثر من رقمين (مثلاً 000 أو 150)، فهذا فاصل ألوف، وليس عشري.
+                # إذا كان عدد الأرقام بعد آخر فاصلة أكثر من رقمين (فاصل ألوف)، نعتبره رقمًا صحيحًا كبيراً
                 if len(decimal_part) > 2:
-                    # نعتبر الرقم كاملاً ونحوله إلى عدد صحيح كبير (60000 أو 392150)
                     final_val = integer_part + decimal_part
                     final_val = re.sub(r'[^\d\.-]', '', final_val)
                     return float(final_val)
                 else:
-                    # إذا كان رقمين أو أقل (مثلاً 31)، فهذا فاصل عشري (6.31)
+                    # إذا كان رقمين أو أقل (فاصل عشري)، نستخدم النقطة كفاصل عشري
                     final_val = f"{integer_part}.{decimal_part}"
                     final_val = re.sub(r'[^\d\.-]', '', final_val)
                     return float(final_val)
             else:
-                # لم يتم العثور على فاصل، يفترض أنه عدد صحيح
                 final_val = re.sub(r'[^\d\.-]', '', temp_val)
                 if not final_val:
                     return None
@@ -106,10 +102,7 @@ def clean_data_type(key, value):
     date_fields = ["تاريخ الصادر", "تاريخ الميلاد الوافد", "تاريخ الدخول", "تاريخ الوارد", "تاريخ الدارسة من", "تاريخ الدراسة الى"]
     if key in date_fields:
         
-        # تحويل الأرقام العربية في التاريخ إلى إنجليزية
         date_str = arabic_to_english_numbers(str(value))
-        
-        # تحسين تنظيف التواريخ: إزالة جميع الأحرف غير الرقمية ما عدا فواصل التاريخ (/, -, .)
         clean_str_base = re.sub(r'[^\d/\-.]', '', date_str).strip()
         
         # أ. محاولة تحويل ميلادي مباشر
@@ -127,10 +120,15 @@ def clean_data_type(key, value):
                 
                 if len(parts) == 3:
                     try:
-                        y, m, d = [int(re.sub(r'[^\d]', '', p)) for p in parts]
+                        y_str, m_str, d_str = parts
+                        # تنظيف كل جزء لضمان أن يكون رقمًا
+                        y = int(re.sub(r'[^\d]', '', y_str))
+                        m = int(re.sub(r'[^\d]', '', m_str))
+                        d = int(re.sub(r'[^\d]', '', d_str))
                     except ValueError:
-                         return None
+                         return None # فشل استخلاص الأرقام
                     
+                    # معالجة الأخطاء الشائعة في قراءة سنة ١٤٤x 
                     if y >= 400 and y <= 500:
                         y += 1000 
                     elif y >= 900 and y <= 999:
@@ -138,11 +136,13 @@ def clean_data_type(key, value):
                         
                     
                     if y > 1300 and y < 1500:
-                        gregorian_date = Hijri(y, m, d).to_gregorian()
-                        return gregorian_date.date()
+                        # إضافة تحقق بسيط لتجنب الأخطاء الفادحة في المكتبة
+                        if 1 <= m <= 12 and 1 <= d <= 30:
+                            gregorian_date = Hijri(y, m, d).to_gregorian()
+                            return gregorian_date.date()
                     
             except Exception:
-                pass
+                pass 
 
         return None
 
