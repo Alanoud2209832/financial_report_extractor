@@ -17,6 +17,7 @@ except ImportError:
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
 
+# قائمة الأعمدة النهائية في قاعدة البيانات (لا تتضمن "مؤشر التشتت" لأنه يتم حذفه في app.py)
 DB_COLUMN_NAMES = [
     "رقم الصادر", "تاريخ الصادر", "اسم المشتبه به", "رقم الهوية",
     "الجنسية", "تاريخ الميلاد الوافد", "تاريخ الدخول", "الحالة الاجتماعية",
@@ -73,7 +74,6 @@ def clean_data_type(key, value):
             
             return float(cleaned_value)
         except ValueError:
-            st.error(f"❌ خطأ رقمي: فشل تحويل القيمة '{value}' في حقل '{key}' إلى رقم.")
             return None
             
     # 3. تحويل الأعمدة التاريخية (DATE)
@@ -82,9 +82,6 @@ def clean_data_type(key, value):
         
         # تحويل الأرقام العربية في التاريخ إلى إنجليزية
         date_str = arabic_to_english_numbers(str(value))
-        
-        # 💡 خطوة تصحيح الأخطاء (DEBUGGING) - لعرض القيمة المنظفة
-        # st.info(f"✅ محاولة تنظيف التاريخ: {key} => '{date_str}'") 
         
         # أ. محاولة تحويل ميلادي مباشر
         try:
@@ -99,7 +96,7 @@ def clean_data_type(key, value):
             try:
                 clean_str = date_str.replace('م', '').strip()
                 
-                # 💡 استخدام re.split لتقسيم النص بأي فاصل من الفواصل الشائعة (/, -, .)
+                # استخدام re.split لتقسيم النص بأي فاصل من الفواصل الشائعة (/, -, .)
                 parts = re.split(r'[/\-.]', clean_str)
                 
                 if len(parts) == 3:
@@ -113,12 +110,9 @@ def clean_data_type(key, value):
                         gregorian_date = Hijri(y, m, d).to_gregorian()
                         return gregorian_date.date()
                     
-            except Exception as he:
-                 # st.error(f"❌ خطأ هجري داخلي: فشل التحويل '{date_str}' بسبب: {he}")
+            except Exception:
                  pass
 
-        # رسالة الخطأ النهائية (لن تظهر إلا إذا فشل كل شيء)
-        # st.error(f"❌ فشل التحويل: القيمة '{value}' في حقل '{key}' غير صالحة كتاريخ.")
         return None
 
     # 4. القيم الأخرى (VARCHAR/TEXT)
@@ -137,6 +131,7 @@ def save_to_db(extracted_data):
         insert_columns = []
         insert_values = []
         
+        # نستخدم DATA_KEYS (التي هي DB_COLUMN_NAMES) لضمان عدم محاولة إدخال 'مؤشر التشتت'
         for key in DATA_KEYS:
             value = extracted_data.get(key)
             
