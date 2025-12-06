@@ -11,7 +11,6 @@ import re
 try:
     from hijri_converter import Hijri
 except ImportError:
-    # سيظهر هذا التحذير في واجهة Streamlit إذا لم يتمكن من تحميل المكتبة
     st.warning("⚠️ مكتبة hijri-converter غير متوفرة. التواريخ الهجرية قد لا يتم تحويلها بشكل صحيح. يرجى تثبيتها عبر 'pip install hijri-converter'.")
     Hijri = None
 
@@ -116,12 +115,12 @@ def clean_data_type(key, value):
         # ب. محاولة التحويل الهجري
         if Hijri:
             try:
-                parts = re.split(r'[/\-.]', clean_str_base)
+                # 💡 التعديل الحاسم: تصفية الأجزاء الفارغة قبل التحويل
+                parts = [p for p in re.split(r'[/\-.]', clean_str_base) if p.strip()] 
                 
                 if len(parts) == 3:
                     try:
                         y_str, m_str, d_str = parts
-                        # تنظيف كل جزء لضمان أن يكون رقمًا
                         y = int(re.sub(r'[^\d]', '', y_str))
                         m = int(re.sub(r'[^\d]', '', m_str))
                         d = int(re.sub(r'[^\d]', '', d_str))
