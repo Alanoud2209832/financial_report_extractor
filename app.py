@@ -180,104 +180,165 @@ def create_final_report_from_db(records, column_names):
     output.seek(0)
     return output.read()
 
+import streamlit as st
+import pandas as pd
 
 # ===============================
-# 3. واجهة المستخدم
+# 1. تنسيق الواجهة (CSS)
+# ===============================
+st.markdown(
+    """
+    <style>
+    /* خلفية عامة */
+    .stApp {
+        background-color: #f5f7fa;
+        font-family: "Tajawal", sans-serif;
+    }
+
+    /* العناوين */
+    h1, h2, h3 {
+        color: #1a3c6e !important;
+        font-weight: 700 !important;
+    }
+
+    /* تنسيق الخط */
+    p, div, span {
+        font-size: 16px !important;
+    }
+
+    /* الأزرار */
+    .stButton button {
+        background-color: #1a3c6e !important;
+        color: white !important;
+        border-radius: 10px !important;
+        padding: 10px 25px !important;
+        font-size: 17px !important;
+        transition: 0.3s;
+    }
+    .stButton button:hover {
+        background-color: #102649 !important;
+        transform: scale(1.05);
+    }
+
+    /* الجدول */
+    .stDataFrame table {
+        border-radius: 10px !important;
+    }
+    .dataframe tbody tr:nth-child(odd) {
+        background-color: #eef2f7 !important;
+    }
+    .dataframe tbody tr:hover {
+        background-color: #d7e3ff !important;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# ===============================
+# 2. واجهة المستخدم
 # ===============================
 def main():
+
     st.set_page_config(layout="wide", page_title="أداة استخلاص وتقارير مالية")
 
-    st.title("استخلاص وتقارير مالية مدعومة بالذكاء الاصطناعي 🤖")
+    st.title("📄 أداة استخلاص وتقارير مالية مدعومة بالذكاء الاصطناعي 🤖")
     st.markdown("---")
 
     uploaded_files = st.file_uploader(
-        "قم بتحميل الملفات (يمكنك اختيار أكثر من ملف)",
+        "📤 قم بتحميل الملفات (يمكنك اختيار عدة ملفات)",
         type=["pdf", "png", "jpg", "jpeg"],
         accept_multiple_files=True
     )
 
+    # حفظ البيانات
     if uploaded_files:
         all_extracted_data = []
 
         if 'extracted_data_df' not in st.session_state:
             st.session_state['extracted_data_df'] = pd.DataFrame()
 
-        if st.button("بدء الاستخلاص"):
+        if st.button("🚀 بدء الاستخلاص"):
             for uploaded_file in uploaded_files:
                 file_bytes, file_name = uploaded_file.read(), uploaded_file.name
                 file_type = file_name.split('.')[-1].lower()
-                st.info(f"جاري معالجة: **{file_name}**")
+                st.info(f"⏳ جاري معالجة الملف: **{file_name}**")
+
                 data = extract_financial_data(file_bytes, file_name, file_type)
+
                 if data:
                     all_extracted_data.append(data)
 
             if all_extracted_data:
                 new_df = pd.DataFrame(all_extracted_data)
-                
-                # إضافة "مؤشر التشتت" للعرض فقط
+
+                # الأعمدة المعروضة
                 display_cols = ["مؤشر التشتت", "اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
                 new_df = new_df.reindex(columns=display_cols, fill_value='غير متوفر')
-                
-                st.session_state['extracted_data_df'] = pd.concat([st.session_state['extracted_data_df'], new_df], ignore_index=True)
+
+                st.session_state['extracted_data_df'] = pd.concat(
+                    [st.session_state['extracted_data_df'], new_df],
+                    ignore_index=True
+                )
+
+    # ======================================================
+    # 📋 جدول البيانات بعد الاستخلاص + قابل للتعديل
+    # ======================================================
+    if not st.session_state['extracted_data_df'].empty:
+        st.subheader("✏️ جميع البيانات المستخلصة (قابلة للتعديل)")
+
+        edited_df = st.data_editor(
+            st.session_state['extracted_data_df'],
+            use_container_width=True,
+            num_rows="dynamic"
+        )
+
+        st.markdown("---")
+
+        # زر الحفظ
+        if st.button("💾 تأكيد وحفظ التعديلات في قاعدة البيانات"):
+            saved_count = 0
+            total_rows = len(edited_df)
+            status_placeholder = st.empty()
+
+            for index, row in edited_df.iterrows():
+                row_data = dict(row)
+
+                # حذف عمود التشتت
+                if 'مؤشر التشتت' in row_data:
+                    del row_data['مؤشر التشتت']
+
+                if save_to_db(row_data):
+                    saved_count += 1
+                else:
+                    status_placeholder.error(f"❌ فشل حفظ السجل رقم {index + 1}.")
+                    break
+
+            if saved_count == total_rows:
+                status_placeholder.success(f"✅ تم حفظ {saved_count} سجل بنجاح!")
+                st.session_state['extracted_data_df'] = pd.DataFrame()
+                st.rerun()
+            else:
+                status_placeholder.warning(f"⚠️ تم حفظ {saved_count} فقط. راجع الأخطاء.")
 
 
-        if not st.session_state['extracted_data_df'].empty:
-            st.subheader("✏️ جميع البيانات المستخلصة (قابلة للتعديل)")
-
-            edited_df = st.data_editor(
-                st.session_state['extracted_data_df'],
-                use_container_width=True,
-                num_rows="dynamic"
-            )
-
-            st.markdown("---")
-
-            # 💡 منطق الحفظ والتوقف عند أول خطأ
-            if st.button("✔️ تأكيد وحفظ التعديلات في قاعدة البيانات"):
-                saved_count = 0
-                total_rows = len(edited_df)
-                status_placeholder = st.empty() 
-
-                for index, row in edited_df.iterrows():
-                    # تحويل الصف إلى قاموس
-                    row_data = dict(row)
-                    
-                    # 💡 الخطوة الحاسمة: حذف عمود "مؤشر التشتت" قبل الحفظ
-                    if 'مؤشر التشتت' in row_data:
-                        del row_data['مؤشر التشتت']
-                        
-                    if save_to_db(row_data): # تمرير القاموس النظيف
-                        saved_count += 1
-                    else:
-                        status_placeholder.error(f"❌ فشل الحفظ عند السجل رقم {index + 1}. تم إيقاف العملية.")
-                        break # توقف عند أول خطأ
-
-                if saved_count == total_rows:
-                    status_placeholder.success(f"✅ تم حفظ {saved_count} سجل بنجاح في قاعدة البيانات!")
-                    # مسح البيانات من الجلسة بعد الحفظ الناجح
-                    st.session_state['extracted_data_df'] = pd.DataFrame()
-                    st.rerun() 
-                elif saved_count > 0:
-                    status_placeholder.warning(f"⚠️ تم حفظ {saved_count} سجل بنجاح. فشل حفظ السجلات المتبقية بسبب الخطأ أعلاه.")
-                elif saved_count == 0 and total_rows > 0:
-                     status_placeholder.error("❌ فشل حفظ جميع السجلات. يرجى مراجعة رسائل الخطأ الحمراء أعلاه.")
-
-
-    # ----------------------------------------------------
-    # قسم التصدير من قاعدة البيانات
-    # ----------------------------------------------------
+    # ======================================================
+    # 📊 قسم التصدير
+    # ======================================================
     st.markdown("---")
     st.subheader("📊 تصدير البيانات النهائية")
 
-    if st.button("⬇️ تحميل تقرير Excel من قاعدة البيانات"):
+    if st.button("⬇️ تحميل تقرير Excel"):
         report_data = fetch_all_reports()
-        
-        if report_data and report_data[0] is not None: 
+
+        if report_data and report_data[0] is not None:
             records, column_names = report_data
-            
-            with st.spinner("⏳ جاري إنشاء ملف Excel من البيانات المحفوظة..."):
+
+            with st.spinner("📝 جاري إنشاء ملف Excel..."):
                 excel_data_bytes = create_final_report_from_db(records, column_names)
-            
+
             if excel_data_bytes:
                 st.download_button(
                     "⬇️ اضغط للتحميل",
@@ -285,11 +346,10 @@ def main():
                     file_name="Final_Database_Report.xlsx",
                     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                 )
-            else:
-                st.warning("لم يتم إنشاء ملف Excel. قد تكون البيانات المسترجعة فارغة.")
         else:
-            st.error("فشل في استرجاع البيانات من قاعدة البيانات أو لا توجد سجلات.")
+            st.error("❌ لا توجد بيانات في قاعدة البيانات.")
 
 
+# تشغيل التطبيق
 if __name__ == "__main__":
     main()
