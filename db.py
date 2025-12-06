@@ -56,6 +56,8 @@ def connect_db():
         return None
 
 
+# db.py - الدالة clean_data_type المعدلة بالكامل
+
 def clean_data_type(key, value):
     """تنظيف وتحويل القيم إلى تنسيقات صالحة لـ PostgreSQL."""
     
@@ -69,9 +71,19 @@ def clean_data_type(key, value):
         try:
             cleaned_value = arabic_to_english_numbers(str(value)) 
             
+            # 💡 الخطوة 1: حذف فواصل الألوف (العربية والإنجليزية)
+            # مثال: '293,436' تصبح '293436'
             cleaned_value = cleaned_value.replace('،', '').replace(',', '')
+            
+            # 💡 الخطوة 2: إزالة أي أحرف أخرى غير الأرقام والنقطة العشرية
             cleaned_value = re.sub(r'[^\d\.]', '', cleaned_value)
             
+            # 💡 الخطوة 3: التحقق من وجود أكثر من نقطة عشرية (لمنع الأخطاء الناتجة عن فاصلة عشرية خاطئة)
+            if cleaned_value.count('.') > 1:
+                 parts = cleaned_value.split('.')
+                 # يتم دمج الجزء الصحيح واستخدام النقطة الأخيرة كفاصل عشري
+                 cleaned_value = "".join(parts[:-1]) + "." + parts[-1]
+
             return float(cleaned_value)
         except ValueError:
             return None
@@ -117,7 +129,6 @@ def clean_data_type(key, value):
 
     # 4. القيم الأخرى (VARCHAR/TEXT)
     return value
-
 
 def save_to_db(extracted_data):
     """يحفظ البيانات المستخلصة إلى جدول تقارير_الاشتباه."""
