@@ -16,7 +16,7 @@ from db import save_to_db, fetch_all_reports
 # ===============================
 # 1. إعدادات API
 # ===============================
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyCwwF-lH79nOAL2XdJxMhCTqAdk8_dxT3I") 
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyA6IijCrhEeeuW8AEdHK75Xj_c69hgmswo") 
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
 SYSTEM_PROMPT = (
     "أنت نظام استخلاص بيانات آلي (OCR/NLP). مهمتك هي قراءة النص والصورة المستخرجة من الوثيقة المالية "
