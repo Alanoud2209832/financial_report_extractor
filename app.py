@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 # app.py
+
 import streamlit as st
 import pandas as pd
 import json
@@ -8,17 +9,21 @@ import base64
 import os
 import re 
 import pytz 
+import time 
+import concurrent.futures 
 from google import genai
 from google.genai.errors import APIError
-import time 
-from db import save_to_db, fetch_all_reports
-import concurrent.futures 
+
+# استيراد الدوال من db.py (يجب التأكد من وجود ملف db.py)
+from db import save_to_db, fetch_all_reports 
 
 # ===============================
-# 1. إعدادات API
+# 1. إعدادات API والثوابت
 # ===============================
+# 💡 يُفضل دائماً استخدام os.getenv لتحميل المفتاح من البيئة بدلاً من كتابته مباشرة
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyCH82HGwbNJxqjABAARHoi1lQfPoYL_j1I") 
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
+
 SYSTEM_PROMPT = (
     "أنت نظام استخلاص بيانات آلي (OCR/NLP). مهمتك هي قراءة النص والصورة المستخرجة من الوثيقة المالية "
     "وتحويل البيانات إلى كائن JSON وفقاً للمخطط المحدد بدقة. "
@@ -45,6 +50,10 @@ RESPONSE_SCHEMA = {
     },
     "propertyOrdering": REPORT_FIELDS_ARABIC
 }
+
+# ===============================
+# 3. الدوال المساعدة والمعالجة الأولية
+# ===============================
 
 # 💡 دالة مساعدة لتحويل الأرقام العربية إلى إنجليزية
 def arabic_to_english_numbers(text):
@@ -85,7 +94,6 @@ def pre_process_data_fix_dates(data):
             # 2. تحديث حقل "تاريخ الدراسة الى" بالتاريخ الثاني المنسق
             if not data.get(end_key) or data.get(end_key).strip() in ['', 'غير متوفر']:
                  data[end_key] = date2_formatted
-                 # لا نستخدم st.info هنا، لأن هذه الدالة تعمل ضمن بيئة متوازية (Thread)
             
     return data
 
@@ -153,19 +161,20 @@ def extract_financial_data(file_bytes, file_name, file_type):
         extracted_data['وقت الاستخلاص'] = pd.Timestamp.now(tz=riyadh_tz).strftime("%Y-%m-%d %H:%M:%S")
         extracted_data['مؤشر التشتت'] = check_for_suspicion(extracted_data) 
         
-        # st.success(f"✅ تم الاستخلاص من '{file_name}' بنجاح! راجع الجدول أدناه.") # لا نستخدم st.success في الـ Thread
         return extracted_data 
 
     except APIError as e:
-        # st.error(f"❌ فشلت محاولة الاستخلاص: {e}") # لا نستخدم st.error في الـ Thread
+        # يمكن تسجيل الخطأ في السجل ولكن لا نعرضه هنا لتجنب المشاكل في الـ Threads
+        # print(f"API Error for {file_name}: {e}")
         return None 
     
     except Exception as e:
-        # st.error(f"❌ خطأ غير متوقع أثناء الاستخلاص: {e}") # لا نستخدم st.error في الـ Thread
+        # print(f"Unexpected Error for {file_name}: {e}")
         return None
     
-# ... (بقية الدوال: create_final_report_from_db, display_basic_stats) ...
-# (تم حذفها للاختصار ولكن يجب أن تكون موجودة)
+# ===============================
+# 3. وظائف التقرير وقاعدة البيانات
+# ===============================
 
 def create_final_report_from_db(records, column_names):
     import xlsxwriter
@@ -274,6 +283,7 @@ def main():
     st.title("📄 أداة استخلاص وتقارير مالية مدعومة بالذكاء الاصطناعي 🤖")
     st.markdown("---")
 
+    # تهيئة Session State 
     if 'extracted_data_df' not in st.session_state:
         st.session_state['extracted_data_df'] = pd.DataFrame()
 
@@ -321,6 +331,7 @@ def main():
                 display_cols = ["مؤشر التشتت", "اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
                 new_df = new_df.reindex(columns=display_cols, fill_value='غير متوفر')
                 
+                # إضافة البيانات المستخلصة إلى بيانات الجلسة (الجدول)
                 st.session_state['extracted_data_df'] = pd.concat(
                     [st.session_state['extracted_data_df'], new_df], 
                     ignore_index=True
@@ -330,25 +341,25 @@ def main():
     # ======================================================
     # 📋 جدول البيانات بعد الاستخلاص + قابل للتعديل
     # ======================================================
-if not st.session_state['extracted_data_df'].empty:
-    st.subheader("✏️ جميع البيانات المستخلصة (قابلة للتعديل)")
+    # 💡 تم تصحيح المسافة البادئة لهذه الكتلة لتكون ضمن الدالة main()
+    if not st.session_state['extracted_data_df'].empty:
+        st.subheader("✏️ جميع البيانات المستخلصة (قابلة للتعديل)")
 
-    edited_df = st.data_editor(
-        st.session_state['extracted_data_df'],
-        use_container_width=True,
-        num_rows="dynamic"
-    )
+        edited_df = st.data_editor(
+            st.session_state['extracted_data_df'],
+            use_container_width=True,
+            num_rows="dynamic"
+        )
 
-    st.markdown("---")
+        st.markdown("---")
 
-    # 💡 تأكد أن زر الحفظ (Save Button) يظهر هنا داخل هذا الشرط
-    # يجب أن يكون هذا الزر موجوداً مباشرة بعد st.markdown("---")
-    if st.button("💾 تأكيد وحفظ التعديلات في قاعدة البيانات"):
-        saved_count = 0
-        total_rows = len(edited_df)
-        status_placeholder = st.empty() 
+        # زر الحفظ
+        if st.button("💾 تأكيد وحفظ التعديلات في قاعدة البيانات"):
+            saved_count = 0
+            total_rows = len(edited_df)
+            status_placeholder = st.empty() 
 
-        for index, row in edited_df.iterrows():
+            # 💡 تم تصحيح حلقة for المكررة
             for index, row in edited_df.iterrows():
                 row_data = dict(row)
                 
@@ -363,7 +374,7 @@ if not st.session_state['extracted_data_df'].empty:
 
             if saved_count == total_rows:
                 status_placeholder.success(f"✅ تم حفظ {saved_count} سجل بنجاح!")
-                st.session_state['extracted_data_df'] = pd.DataFrame()
+                st.session_state['extracted_data_df'] = pd.DataFrame() # إفراغ الجدول بعد الحفظ الناجح
                 st.rerun() 
             elif saved_count > 0:
                 status_placeholder.warning(f"⚠️ تم حفظ {saved_count} فقط. راجع الأخطاء.")
