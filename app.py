@@ -152,44 +152,63 @@ def check_for_suspicion(data):
 # 2. وظائف المعالجة (بمحاولة واحدة)
 # ===============================
 def extract_financial_data(file_bytes, file_name, file_type):
-    """يستخلص البيانات بمحاولة واحدة فقط."""
+    """يستخلص البيانات بمحاولات متعددة مع آلية التراجع الأُسّي."""
     if not GEMINI_API_KEY:
         return None
         
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        mime_type = "application/pdf" if file_type=='pdf' else f"image/{'jpeg' if file_type=='jpg' else file_type}"
-        content_parts = [
-            "قم باستخلاص جميع البيانات...",
-            {"inlineData": {"data": base64.b64encode(file_bytes).decode('utf-8'), "mimeType": mime_type}}
-        ]
-        config = {
-            "systemInstruction": SYSTEM_PROMPT,
-            "responseMimeType": "application/json",
-            "responseSchema": RESPONSE_SCHEMA
-        }
-        
-        response = client.models.generate_content(model=MODEL_NAME, contents=content_parts, config=config)
-            
-        extracted_data = json.loads(response.text)
-        
-        extracted_data = pre_process_data_fix_dates(extracted_data) 
-        
-        extracted_data['اسم الملف'] = file_name
-        
-        riyadh_tz = pytz.timezone('Asia/Riyadh')
-        extracted_data['وقت الاستخلاص'] = pd.Timestamp.now(tz=riyadh_tz).strftime("%Y-%m-%d %H:%M:%S")
-        extracted_data['مؤشر التشتت'] = check_for_suspicion(extracted_data) 
-        
-        return extracted_data 
-
-    except APIError as e:
-        st.error(f"❌ فشلت محاولة الاستخلاص من '{file_name}': {e}")
-        return None 
+    MAX_RETRIES = 3 # الحد الأقصى للمحاولات
+    INITIAL_WAIT_SECONDS = 5 # وقت الانتظار الأولي
     
-    except Exception as e:
-        st.error(f"❌ خطأ غير متوقع أثناء الاستخلاص من '{file_name}': {e}")
-        return None
+    for attempt in range(MAX_RETRIES):
+        try:
+            client = genai.Client(api_key=GEMINI_API_KEY)
+            mime_type = "application/pdf" if file_type=='pdf' else f"image/{'jpeg' if file_type=='jpg' else file_type}"
+            content_parts = [
+                "قم باستخلاص جميع البيانات...",
+                {"inlineData": {"data": base64.b64encode(file_bytes).decode('utf-8'), "mimeType": mime_type}}
+            ]
+            config = {
+                "systemInstruction": SYSTEM_PROMPT,
+                "responseMimeType": "application/json",
+                "responseSchema": RESPONSE_SCHEMA
+            }
+            
+            response = client.models.generate_content(model=MODEL_NAME, contents=content_parts, config=config)
+                
+            extracted_data = json.loads(response.text)
+            
+            extracted_data = pre_process_data_fix_dates(extracted_data) 
+            extracted_data['اسم الملف'] = file_name
+            
+            riyadh_tz = pytz.timezone('Asia/Riyadh')
+            extracted_data['وقت الاستخلاص'] = pd.Timestamp.now(tz=riyadh_tz).strftime("%Y-%m-%d %H:%M:%S")
+            extracted_data['مؤشر التشتت'] = check_for_suspicion(extracted_data) 
+            
+            return extracted_data # نجاح، الخروج من الحلقة
+
+        except APIError as e:
+            # التحقق من خطأ 503 (الخادم مشغول) أو 429 (تجاوز الحد الأقصى للمعدل)
+            error_message = str(e)
+            is_overloaded_error = '503 UNAVAILABLE' in error_message or 'RESOURCE_EXHAUSTED' in error_message
+            
+            if is_overloaded_error and attempt < MAX_RETRIES - 1:
+                # حساب وقت الانتظار (تراجع أُسّي)
+                wait_time = INITIAL_WAIT_SECONDS * (2 ** attempt) 
+                st.warning(f"⚠️ خطأ: الخادم مشغول (503). المحاولة رقم {attempt + 1} فشلت لملف '{file_name}'. سيتم الانتظار {wait_time} ثوانٍ قبل المحاولة مجدداً...")
+                time.sleep(wait_time)
+                continue # الانتقال للمحاولة التالية
+            else:
+                # إذا كان الخطأ دائماً (مثل 403) أو فشلت جميع المحاولات
+                st.error(f"❌ فشلت محاولة الاستخلاص من '{file_name}' بعد {attempt + 1} محاولات: {e}")
+                return None
+        
+        except Exception as e:
+            # التعامل مع الأخطاء الأخرى غير المتوقعة
+            st.error(f"❌ خطأ غير متوقع أثناء الاستخلاص من '{file_name}': {e}")
+            return None
+    
+    st.error(f"❌ فشلت جميع المحاولات ({MAX_RETRIES}) لاستخلاص البيانات من '{file_name}'.")
+    return None
     
 # ===============================
 # 3. وظائف التقرير وقاعدة البيانات
