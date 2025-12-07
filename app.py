@@ -240,7 +240,7 @@ def create_final_report_from_db(records, column_names):
     output = io.BytesIO()
     writer = pd.ExcelWriter(output, engine='xlsxwriter')
     
-    sheet_name = 'التقرير المالي النهائي' 
+    sheet_name = 'بيانات البلاغات' 
     
     df.to_excel(writer, sheet_name=sheet_name, index=False)
     
