@@ -63,7 +63,7 @@ def clean_data_type(key, value):
     if value is None or value == 'غير متوفر' or value == '' or pd.isna(value):
         return None
 
-    # 2. تحويل الأعمدة الرقمية (NUMERIC) - تم حل مشكلة الأرقام الكبيرة والصغيرة هنا
+    # 2. تحويل الأعمدة الرقمية (NUMERIC)
     numeric_fields = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
     if key in numeric_fields:
         try:
@@ -78,13 +78,11 @@ def clean_data_type(key, value):
                 
                 integer_part = re.sub(r'[,\.]', '', integer_part) 
                 
-                # إذا كان عدد الأرقام بعد آخر فاصلة أكثر من رقمين (فاصل ألوف)، نعتبره رقمًا صحيحًا كبيراً
                 if len(decimal_part) > 2:
                     final_val = integer_part + decimal_part
                     final_val = re.sub(r'[^\d\.-]', '', final_val)
                     return float(final_val)
                 else:
-                    # إذا كان رقمين أو أقل (فاصل عشري)، نستخدم النقطة كفاصل عشري
                     final_val = f"{integer_part}.{decimal_part}"
                     final_val = re.sub(r'[^\d\.-]', '', final_val)
                     return float(final_val)
@@ -112,34 +110,46 @@ def clean_data_type(key, value):
         except Exception:
             pass
         
-        # ب. محاولة التحويل الهجري
+        # ب. محاولة التحويل الهجري (تم التعديل هنا ليدعم ترتيب Y/M/D و D/M/Y)
         if Hijri:
             try:
-                # 💡 التعديل الحاسم: تصفية الأجزاء الفارغة قبل التحويل
                 parts = [p for p in re.split(r'[/\-.]', clean_str_base) if p.strip()] 
                 
                 if len(parts) == 3:
-                    try:
-                        y_str, m_str, d_str = parts
-                        y = int(re.sub(r'[^\d]', '', y_str))
-                        m = int(re.sub(r'[^\d]', '', m_str))
-                        d = int(re.sub(r'[^\d]', '', d_str))
-                    except ValueError:
-                         return None # فشل استخلاص الأرقام
                     
-                    # معالجة الأخطاء الشائعة في قراءة سنة ١٤٤x 
-                    if y >= 400 and y <= 500:
-                        y += 1000 
-                    elif y >= 900 and y <= 999:
-                        y = 1400 + (y % 100)
-                        
+                    # 1. الافتراض الأول: Y/M/D (كما كان مفترضاً في الكود الأصلي)
+                    y_str_attempt, m_str, d_str_attempt = parts 
                     
-                    if y > 1300 and y < 1500:
-                        # إضافة تحقق بسيط لتجنب الأخطاء الفادحة في المكتبة
-                        if 1 <= m <= 12 and 1 <= d <= 30:
-                            gregorian_date = Hijri(y, m, d).to_gregorian()
-                            return gregorian_date.date()
+                    # 2. إنشاء قائمة بالترتيبات المحتملة (Y, M, D) للتحقق منها
+                    possible_dates = []
+
+                    # إضافة الافتراض الأول: Y, M, D
+                    possible_dates.append((y_str_attempt, m_str, d_str_attempt))
                     
+                    # إضافة الافتراض البديل: D, M, Y (يتم تبديل Y و D) إذا كان الجزء الأول قصيراً
+                    if len(y_str_attempt) < 4 and len(d_str_attempt) == 4:
+                        possible_dates.append((d_str_attempt, m_str, y_str_attempt))
+
+                    for y_str, m_str, d_str in possible_dates:
+                        try:
+                            y = int(re.sub(r'[^\d]', '', y_str))
+                            m = int(re.sub(r'[^\d]', '', m_str))
+                            d = int(re.sub(r'[^\d]', '', d_str))
+                        except ValueError:
+                            continue # فشل استخلاص الأرقام
+
+                        # معالجة الأخطاء الشائعة في قراءة سنة ١٤٤x (من الكود الأصلي)
+                        if y >= 400 and y <= 500:
+                            y += 1000 
+                        elif y >= 900 and y <= 999:
+                            y = 1400 + (y % 100)
+                            
+                        if y > 1300 and y < 1500:
+                            # التحقق البسيط قبل التحويل
+                            if 1 <= m <= 12 and 1 <= d <= 30:
+                                gregorian_date = Hijri(y, m, d).to_gregorian()
+                                return gregorian_date.date()
+                                
             except Exception:
                 pass 
 
