@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 # app.py
-
 import streamlit as st
 import pandas as pd
 import json
@@ -9,18 +8,14 @@ import base64
 import os
 import re 
 import pytz 
-import time 
-import concurrent.futures 
 from google import genai
 from google.genai.errors import APIError
-
-# استيراد الدوال من db.py (يجب التأكد من وجود ملف db.py)
-from db import save_to_db, fetch_all_reports 
+import time 
+from db import save_to_db, fetch_all_reports
 
 # ===============================
-# 1. إعدادات API والثوابت
+# 1. إعدادات API
 # ===============================
-# 💡 يُفضل دائماً استخدام os.getenv لتحميل المفتاح من البيئة بدلاً من كتابته مباشرة
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyCH82HGwbNJxqjABAARHoi1lQfPoYL_j1I") 
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
 
@@ -51,10 +46,6 @@ RESPONSE_SCHEMA = {
     "propertyOrdering": REPORT_FIELDS_ARABIC
 }
 
-# ===============================
-# 3. الدوال المساعدة والمعالجة الأولية
-# ===============================
-
 # 💡 دالة مساعدة لتحويل الأرقام العربية إلى إنجليزية
 def arabic_to_english_numbers(text):
     if not isinstance(text, str):
@@ -62,41 +53,6 @@ def arabic_to_english_numbers(text):
     arabic_map = {'٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
                   '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9'}
     return text.translate(str.maketrans(arabic_map))
-
-
-# 💡 دالة معالجة أولية جديدة: لحل مشكلة التواريخ المتلاصقة
-def pre_process_data_fix_dates(data):
-    """تبحث عن التواريخ المتلاصقة (مثل 2022/10/052023/10/05) وتقوم بفصلها."""
-    
-    start_key = "تاريخ الدارسة من"
-    end_key = "تاريخ الدراسة الى"
-    
-    start_date_value = data.get(start_key, "")
-    
-    if start_date_value:
-        # ننظف السلسلة النصية من أي أحرف غير ضرورية للحصول على أرقام وفواصل فقط
-        clean_value = re.sub(r'[^\d]', '', start_date_value).strip()
-        
-        # إذا كان طول السلسلة النظيفة 16 حرفاً (YYYYMMDDYYYYMMDD)
-        if len(clean_value) == 16:
-            
-            # نفصل التاريخ الأول (8 أحرف) والتاريخ الثاني (8 أحرف)
-            date1_clean = clean_value[:8] 
-            date2_clean = clean_value[8:] 
-            
-            # إعادة تنسيق التواريخ إلى YYYY/MM/DD
-            date1_formatted = f"{date1_clean[:4]}/{date1_clean[4:6]}/{date1_clean[6:]}"
-            date2_formatted = f"{date2_clean[:4]}/{date2_clean[4:6]}/{date2_clean[6:]}"
-            
-            # 1. تحديث حقل "تاريخ الدارسة من" بالتاريخ الأول المنسق
-            data[start_key] = date1_formatted
-            
-            # 2. تحديث حقل "تاريخ الدراسة الى" بالتاريخ الثاني المنسق
-            if not data.get(end_key) or data.get(end_key).strip() in ['', 'غير متوفر']:
-                 data[end_key] = date2_formatted
-            
-    return data
-
 
 # 💡 دالة التحقق من التشتت (المؤشر)
 def check_for_suspicion(data):
@@ -132,8 +88,44 @@ def check_for_suspicion(data):
 # ===============================
 # 2. وظائف المعالجة (بمحاولة واحدة)
 # ===============================
+# 💡 دالة معالجة أولية جديدة: لحل مشكلة التواريخ المتلاصقة
+def pre_process_data_fix_dates(data):
+    """تبحث عن التواريخ المتلاصقة (مثل 2022/10/052023/10/05) وتقوم بفصلها."""
+    
+    start_key = "تاريخ الدارسة من"
+    end_key = "تاريخ الدراسة الى"
+    
+    start_date_value = data.get(start_key, "")
+    
+    if start_date_value:
+        # ننظف السلسلة النصية من أي أحرف غير ضرورية للحصول على أرقام وفواصل فقط
+        # نستخدم نسخة نظيفة لا تحتوي إلا على أرقام
+        clean_value = re.sub(r'[^\d]', '', start_date_value).strip()
+        
+        # إذا كان طول السلسلة النظيفة 16 حرفاً (4+2+2) * 2، فهذا يؤكد تلاصق تاريخين ميلاديين (YYYYMMDDYYYYMMDD)
+        if len(clean_value) == 16:
+            
+            # نفصل التاريخ الأول (8 أحرف) والتاريخ الثاني (8 أحرف)
+            date1_clean = clean_value[:8] # YYYYMMDD
+            date2_clean = clean_value[8:] # YYYYMMDD
+            
+            # إعادة تنسيق التواريخ إلى YYYY/MM/DD
+            date1_formatted = f"{date1_clean[:4]}/{date1_clean[4:6]}/{date1_clean[6:]}"
+            date2_formatted = f"{date2_clean[:4]}/{date2_clean[4:6]}/{date2_clean[6:]}"
+            
+            # 1. تحديث حقل "تاريخ الدارسة من" بالتاريخ الأول المنسق
+            data[start_key] = date1_formatted
+            
+            # 2. تحديث حقل "تاريخ الدراسة الى" بالتاريخ الثاني المنسق
+            # نتحقق إذا كان الحقل فارغاً لتجنب الكتابة فوق قيمة صحيحة مستخلصة
+            if not data.get(end_key) or data.get(end_key).strip() in ['', 'غير متوفر']:
+                 data[end_key] = date2_formatted
+                 st.info(f"💡 تم فصل التاريخين المتلاصقين: {date1_formatted} (من) و {date2_formatted} (إلى) وإسنادهما للحقول الصحيحة.")
+            
+    return data
+    
 def extract_financial_data(file_bytes, file_name, file_type):
-    """يستخلص البيانات بمحاولة واحدة فقط."""
+    """يستخلص البيانات بمحاولة واحدة فقط للحفاظ على حصة API."""
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
         mime_type = "application/pdf" if file_type=='pdf' else f"image/{'jpeg' if file_type=='jpg' else file_type}"
@@ -147,34 +139,29 @@ def extract_financial_data(file_bytes, file_name, file_type):
             "responseSchema": RESPONSE_SCHEMA
         }
 
-        # لا نستخدم st.spinner هنا لأنه سيعيق Streamlit في المعالجة المتوازية
-        response = client.models.generate_content(model=MODEL_NAME, contents=content_parts, config=config)
+        # تم إزالة حلقة التكرار
+        with st.spinner(f"⏳ جاري الاستخلاص من '{file_name}' (محاولة واحدة)..."):
+            response = client.models.generate_content(model=MODEL_NAME, contents=content_parts, config=config)
             
         extracted_data = json.loads(response.text)
-        
-        # 💡 استدعاء دالة المعالجة الأولية هنا
-        extracted_data = pre_process_data_fix_dates(extracted_data) 
-        
         extracted_data['اسم الملف'] = file_name
         
         riyadh_tz = pytz.timezone('Asia/Riyadh')
         extracted_data['وقت الاستخلاص'] = pd.Timestamp.now(tz=riyadh_tz).strftime("%Y-%m-%d %H:%M:%S")
         extracted_data['مؤشر التشتت'] = check_for_suspicion(extracted_data) 
         
+        st.success(f"✅ تم الاستخلاص من '{file_name}' بنجاح!")
         return extracted_data 
 
     except APIError as e:
-        # يمكن تسجيل الخطأ في السجل ولكن لا نعرضه هنا لتجنب المشاكل في الـ Threads
-        # print(f"API Error for {file_name}: {e}")
+        # يتم الإبلاغ عن الخطأ مباشرة بدون إعادة محاولة
+        st.error(f"❌ فشلت محاولة الاستخلاص: {e}")
         return None 
     
     except Exception as e:
-        # print(f"Unexpected Error for {file_name}: {e}")
+        st.error(f"❌ خطأ غير متوقع أثناء الاستخلاص: {e}")
         return None
     
-# ===============================
-# 3. وظائف التقرير وقاعدة البيانات
-# ===============================
 
 def create_final_report_from_db(records, column_names):
     import xlsxwriter
@@ -206,6 +193,9 @@ def create_final_report_from_db(records, column_names):
     output.seek(0)
     return output.read()
 
+# ===============================
+# 3. الإحصائيات العامة 
+# ===============================
 def display_basic_stats():
     """يعرض عدد السجلات المحفوظة في قاعدة البيانات."""
     st.markdown("---")
@@ -273,14 +263,13 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-
 # ===============================
 # 5. واجهة المستخدم الرئيسية
 # ===============================
 def main():
     st.set_page_config(layout="wide", page_title="أداة استخلاص وتقارير مالية")
 
-    st.title("📄 أداة استخلاص وتقارير مالية مدعومة بالذكاء الاصطناعي 🤖")
+    st.title("📄 نظام استخلاص البيانات بالذكاء الاصطناعي")
     st.markdown("---")
 
     # تهيئة Session State 
@@ -293,41 +282,18 @@ def main():
         accept_multiple_files=True
     )
 
-if uploaded_files:
+    # حفظ البيانات
+    if uploaded_files:
         all_extracted_data = []
         
-        # مستوى المسافة البادئة 1 (لـ if st.button)
-        if st.button("🚀 بدء الاستخلاص"): 
-            
-            extraction_tasks = []
-            # مستوى المسافة البادئة 2 (لـ for uploaded_file)
+        if st.button("🚀 بدء الاستخلاص"):
             for uploaded_file in uploaded_files:
                 file_bytes, file_name = uploaded_file.read(), uploaded_file.name
                 file_type = file_name.split('.')[-1].lower()
-                extraction_tasks.append((file_bytes, file_name, file_type))
-
-            st.info(f"⏳ جاري معالجة {len(extraction_tasks)} ملفات بالتوازي... قد يستغرق هذا بعض الوقت.")
-
-            # مستوى المسافة البادئة 2 (يجب أن يكون هنا) 
-            # 💡 تأكدي أن هذا السطر يبدأ بنفس محاذاة 'extraction_tasks = []' و 'st.info(...)'
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor: 
-                # مستوى المسافة البادئة 3 (داخل كتلة with)
-                results = [executor.submit(extract_financial_data, bytes, name, type) 
-                           for bytes, name, type in extraction_tasks]
-                
-                # تجميع النتائج عند الانتهاء وعرض شريط التقدم
-                progress_bar = st.progress(0)
-                processed_count = 0
-
-                for future in concurrent.futures.as_completed(results):
-                    data = future.result()
-                    if data:
-                        all_extracted_data.append(data)
-                    
-                    processed_count += 1
-                    progress_bar.progress(processed_count / len(extraction_tasks))
-            
-            st.success("✅ اكتمل الاستخلاص المتوازي لجميع الملفات.")
+                st.info(f"⏳ جاري معالجة الملف: **{file_name}**")
+                data = extract_financial_data(file_bytes, file_name, file_type)
+                if data:
+                    all_extracted_data.append(data)
 
             if all_extracted_data:
                 new_df = pd.DataFrame(all_extracted_data)
@@ -335,7 +301,6 @@ if uploaded_files:
                 display_cols = ["مؤشر التشتت", "اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
                 new_df = new_df.reindex(columns=display_cols, fill_value='غير متوفر')
                 
-                # إضافة البيانات المستخلصة إلى بيانات الجلسة (الجدول)
                 st.session_state['extracted_data_df'] = pd.concat(
                     [st.session_state['extracted_data_df'], new_df], 
                     ignore_index=True
@@ -345,8 +310,7 @@ if uploaded_files:
     # ======================================================
     # 📋 جدول البيانات بعد الاستخلاص + قابل للتعديل
     # ======================================================
-    # 💡 تم تصحيح المسافة البادئة لهذه الكتلة لتكون ضمن الدالة main()
-if not st.session_state['extracted_data_df'].empty:
+    if not st.session_state['extracted_data_df'].empty:
         st.subheader("✏️ جميع البيانات المستخلصة (قابلة للتعديل)")
 
         edited_df = st.data_editor(
@@ -363,7 +327,6 @@ if not st.session_state['extracted_data_df'].empty:
             total_rows = len(edited_df)
             status_placeholder = st.empty() 
 
-            # 💡 تم تصحيح حلقة for المكررة
             for index, row in edited_df.iterrows():
                 row_data = dict(row)
                 
@@ -378,7 +341,7 @@ if not st.session_state['extracted_data_df'].empty:
 
             if saved_count == total_rows:
                 status_placeholder.success(f"✅ تم حفظ {saved_count} سجل بنجاح!")
-                st.session_state['extracted_data_df'] = pd.DataFrame() # إفراغ الجدول بعد الحفظ الناجح
+                st.session_state['extracted_data_df'] = pd.DataFrame()
                 st.rerun() 
             elif saved_count > 0:
                 status_placeholder.warning(f"⚠️ تم حفظ {saved_count} فقط. راجع الأخطاء.")
