@@ -83,54 +83,46 @@ def check_for_suspicion(data):
     return suspicion_indicator.strip() or "✅ سليم"
 
 # ===============================
-# 2. وظائف المعالجة (مع خاصية إعادة المحاولة)
+# 2. وظائف المعالجة (بمحاولة واحدة)
 # ===============================
 def extract_financial_data(file_bytes, file_name, file_type):
-    MAX_RETRIES = 3 
-    for attempt in range(MAX_RETRIES):
-        try:
-            client = genai.Client(api_key=GEMINI_API_KEY)
-            mime_type = "application/pdf" if file_type=='pdf' else f"image/{'jpeg' if file_type=='jpg' else file_type}"
-            content_parts = [
-                "قم باستخلاص جميع البيانات...",
-                {"inlineData": {"data": base64.b64encode(file_bytes).decode('utf-8'), "mimeType": mime_type}}
-            ]
-            config = {
-                "systemInstruction": SYSTEM_PROMPT,
-                "responseMimeType": "application/json",
-                "responseSchema": RESPONSE_SCHEMA
-            }
+    """يستخلص البيانات بمحاولة واحدة فقط للحفاظ على حصة API."""
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        mime_type = "application/pdf" if file_type=='pdf' else f"image/{'jpeg' if file_type=='jpg' else file_type}"
+        content_parts = [
+            "قم باستخلاص جميع البيانات...",
+            {"inlineData": {"data": base64.b64encode(file_bytes).decode('utf-8'), "mimeType": mime_type}}
+        ]
+        config = {
+            "systemInstruction": SYSTEM_PROMPT,
+            "responseMimeType": "application/json",
+            "responseSchema": RESPONSE_SCHEMA
+        }
 
-            with st.spinner(f"⏳ جاري الاستخلاص من '{file_name}' - المحاولة {attempt + 1} / {MAX_RETRIES}..."):
-                response = client.models.generate_content(model=MODEL_NAME, contents=content_parts, config=config)
-                
-            extracted_data = json.loads(response.text)
-            extracted_data['اسم الملف'] = file_name
+        # تم إزالة حلقة التكرار
+        with st.spinner(f"⏳ جاري الاستخلاص من '{file_name}' (محاولة واحدة)..."):
+            response = client.models.generate_content(model=MODEL_NAME, contents=content_parts, config=config)
             
-            riyadh_tz = pytz.timezone('Asia/Riyadh')
-            extracted_data['وقت الاستخلاص'] = pd.Timestamp.now(tz=riyadh_tz).strftime("%Y-%m-%d %H:%M:%S")
-            extracted_data['مؤشر التشتت'] = check_for_suspicion(extracted_data) 
-            
-            st.success(f"✅ تم الاستخلاص من '{file_name}' بنجاح!")
-            return extracted_data 
-
-        except APIError as e:
-            # التعامل مع خطأ الحصة (429) أو خطأ الخادم المؤقت (503)
-            if ('429' in str(e) or '503' in str(e)) and attempt < MAX_RETRIES - 1:
-                retry_match = re.search(r"'retryDelay': '(\d+)s'", str(e))
-                wait_time = int(retry_match.group(1)) + 5 if retry_match else 2 ** attempt
-                st.warning(f"⚠️ خطأ في الحصة (429) أو مؤقت (503). سيتم إعادة المحاولة بعد {wait_time} ثوانٍ.")
-                time.sleep(wait_time)
-                continue
-            else:
-                st.error(f"❌ خطأ أثناء الاستخلاص بعد {attempt + 1} محاولات: {e}")
-                return None 
+        extracted_data = json.loads(response.text)
+        extracted_data['اسم الملف'] = file_name
         
-        except Exception as e:
-            st.error(f"❌ خطأ غير متوقع أثناء الاستخلاص: {e}")
-            return None
+        riyadh_tz = pytz.timezone('Asia/Riyadh')
+        extracted_data['وقت الاستخلاص'] = pd.Timestamp.now(tz=riyadh_tz).strftime("%Y-%m-%d %H:%M:%S")
+        extracted_data['مؤشر التشتت'] = check_for_suspicion(extracted_data) 
+        
+        st.success(f"✅ تم الاستخلاص من '{file_name}' بنجاح!")
+        return extracted_data 
+
+    except APIError as e:
+        # يتم الإبلاغ عن الخطأ مباشرة بدون إعادة محاولة
+        st.error(f"❌ فشلت محاولة الاستخلاص: {e}")
+        return None 
     
-    return None
+    except Exception as e:
+        st.error(f"❌ خطأ غير متوقع أثناء الاستخلاص: {e}")
+        return None
+    
 
 def create_final_report_from_db(records, column_names):
     import xlsxwriter
@@ -163,14 +155,13 @@ def create_final_report_from_db(records, column_names):
     return output.read()
 
 # ===============================
-# 3. الإحصائيات العامة (جديد)
+# 3. الإحصائيات العامة 
 # ===============================
 def display_basic_stats():
     """يعرض عدد السجلات المحفوظة في قاعدة البيانات."""
     st.markdown("---")
     st.subheader("إحصائيات عامة 📈")
     
-    # جلب جميع السجلات من قاعدة البيانات
     report_data = fetch_all_reports() 
     
     total_count = 0
@@ -178,7 +169,6 @@ def display_basic_stats():
         records, _ = report_data
         total_count = len(records)
     
-    # عرض العدد الإجمالي للسجلات
     st.metric(
         label="إجمالي عدد السجلات/الملفات المحفوظة", 
         value=total_count,
@@ -240,7 +230,7 @@ st.markdown(
 def main():
     st.set_page_config(layout="wide", page_title="أداة استخلاص وتقارير مالية")
 
-    st.title("نظام استخلاص البيانات 📄")
+    st.title("📄 أداة استخلاص وتقارير مالية مدعومة بالذكاء الاصطناعي 🤖")
     st.markdown("---")
 
     # تهيئة Session State 
