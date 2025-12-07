@@ -12,6 +12,7 @@ from google import genai
 from google.genai.errors import APIError
 import time 
 from db import save_to_db, fetch_all_reports
+import concurrent.futures 
 
 # ===============================
 # 1. إعدادات API
@@ -283,17 +284,25 @@ def main():
     )
 
     # حفظ البيانات
-    if uploaded_files:
-        all_extracted_data = []
-        
-        if st.button("🚀 بدء الاستخلاص"):
+extraction_tasks = []
             for uploaded_file in uploaded_files:
                 file_bytes, file_name = uploaded_file.read(), uploaded_file.name
                 file_type = file_name.split('.')[-1].lower()
-                st.info(f"⏳ جاري معالجة الملف: **{file_name}**")
-                data = extract_financial_data(file_bytes, file_name, file_type)
-                if data:
-                    all_extracted_data.append(data)
+                extraction_tasks.append((file_bytes, file_name, file_type))
+
+            st.info(f"⏳ جاري معالجة {len(extraction_tasks)} ملفات بالتوازي...")
+
+            # استخدام 5 عمال (threads) للمعالجة المتزامنة
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                # إرسال المهام للتنفيذ المتوازي
+                results = [executor.submit(extract_financial_data, bytes, name, type) 
+                           for bytes, name, type in extraction_tasks]
+                
+                # تجميع النتائج عند الانتهاء
+                for future in concurrent.futures.as_completed(results):
+                    data = future.result()
+                    if data:
+                        all_extracted_data.append(data)
 
             if all_extracted_data:
                 new_df = pd.DataFrame(all_extracted_data)
