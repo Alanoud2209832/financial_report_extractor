@@ -27,7 +27,7 @@ DB_COLUMN_NAMES = [
     "رقم الوارد", "تاريخ الوارد", "رقم صاحب العمل/ السجل التجاري",
     "سبب الاشتباه", "تاريخ الدارسة من", "تاريخ الدراسة الى",
     "إجمالي إيداع الدراسة",
-    "رقم الدلالة", # العمود الجديد
+    "رقم الدلالة", 
     "اسم الملف",
     "وقت الاستخلاص"
 ]
@@ -36,6 +36,7 @@ DATA_KEYS = DB_COLUMN_NAMES
 
 # دالة مساعدة لتحويل الأرقام العربية إلى إنجليزية
 def arabic_to_english_numbers(text):
+    """تحويل الأرقام العربية إلى إنجليزية لتسهيل المعالجة."""
     if not isinstance(text, str):
         return text
     
@@ -50,7 +51,6 @@ def connect_db():
     """ينشئ اتصالًا بقاعدة البيانات."""
     try:
         if not DB_URL:
-            # st.error("❌ متغير DATABASE_URL غير موجود. يرجى مراجعة ملف .env")
             return None
         conn = psycopg2.connect(DB_URL, sslmode='require')
         return conn
@@ -101,19 +101,16 @@ def clean_data_type(key, value):
     # 2. تحويل الأعمدة الرقمية (NUMERIC/INTEGER)
     numeric_fields = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
     
-    # يتم تطبيق تحويل الرقم على 'رقم الدلالة'
     if key in numeric_fields or key == "رقم الدلالة":
         try:
             cleaned_value = arabic_to_english_numbers(str(value))
             
             # منطق رقم الدلالة (يجب أن يكون INTEGER)
             if key == "رقم الدلالة":
-                # ننظف من أي أحرف غير رقمية
                 num_str = re.sub(r'[^\d]', '', cleaned_value)
                 if not num_str:
                     return None
                 num = int(num_str)
-                # حفظ قيمة NULL إذا كانت خارج النطاق (1-11)
                 return num if 1 <= num <= 11 else None 
             
             # منطق الأرقام المالية (المتغير)
@@ -196,11 +193,11 @@ def save_to_db(extracted_data):
     insert_values = []
     
     for key in DATA_KEYS:
-        # التأكد من أن المفتاح موجود في extracted_data
         value = extracted_data.get(key)
         
         processed_value = clean_data_type(key, value)
         
+        # لعرض بيانات الحفظ فقط
         processed_data_for_display[key] = str(processed_value) if isinstance(processed_value, datetime.date) else processed_value
 
         insert_columns.append(sql.Identifier(key))
@@ -231,7 +228,7 @@ def save_to_db(extracted_data):
         conn.close()
         return True
     except Exception as e:
-        # st.error(f"❌ حدث خطأ أثناء حفظ البيانات: {e}") # يتم عرضها في app.py
+        # يتم عرض هذا الخطأ في app.py
         if 'does not exist' in str(e) and 'رقم الدلالة' in str(e):
              st.error("💡 ملاحظة: إذا ظهر هذا الخطأ، فتأكد أنك أنشأت عمود 'رقم الدلالة' في جدول PostgreSQL الخاص بك بنوع **INTEGER**.")
         
@@ -249,15 +246,16 @@ def fetch_all_reports():
     try:
         cur = conn.cursor()
         
-        # التأكد من جلب جميع الأعمدة المحددة لكي يتطابق مع DataFrame في app.py
+        # اختيار جميع الأعمدة المعرفة فقط (تم حذف "id")
         select_columns = sql.SQL(', ').join([sql.Identifier(col) for col in DB_COLUMN_NAMES])
 
-        select_query = sql.SQL('SELECT id, {columns} FROM public.تقارير_الاشتباه').format(columns=select_columns)
+        # الاستعلام لا يطلب عمود "id" الآن
+        select_query = sql.SQL('SELECT {columns} FROM public.تقارير_الاشتباه').format(columns=select_columns)
         
         cur.execute(select_query)
         
-        # يجب دمج عمود id مع أسماء الأعمدة الأخرى
-        column_names = ['id'] + [desc[0] for desc in cur.description[1:]] 
+        # أسماء الأعمدة المعادة هي نفسها DB_COLUMN_NAMES
+        column_names = DB_COLUMN_NAMES 
         records = cur.fetchall()
         
         cur.close()
