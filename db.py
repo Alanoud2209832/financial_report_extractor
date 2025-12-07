@@ -83,9 +83,12 @@ def _convert_hijri_to_date(parts_tuple):
     if y > 1300 and y < 1500:
         # تحقق بسيط من نطاق الشهر واليوم قبل استخدام المكتبة
         if 1 <= m <= 12 and 1 <= d <= 30:
-            # 💡 يتم التحويل الفعلي هنا
-            gregorian_date = Hijri(y, m, d).to_gregorian()
-            return gregorian_date.date()
+            try:
+                gregorian_date = Hijri(y, m, d).to_gregorian()
+                # 💡 التصحيح الحاسم: حذف .date() الزائدة
+                return gregorian_date 
+            except Exception:
+                return None
                 
     return None
 
@@ -133,7 +136,6 @@ def clean_data_type(key, value):
         date_str = arabic_to_english_numbers(str(value))
         clean_str_base = re.sub(r'[^\d/\-.]', '', date_str).strip()
         
-        # 💡 تحديد ما إذا كان التاريخ متوقع أن يكون هجرياً (لتعطيل محاولة التحويل الميلادي الخاطئة)
         is_hijri_expected = key in ["تاريخ الصادر", "تاريخ الوارد", "تاريخ الدارسة من", "تاريخ الدراسة الى"]
 
         # أ. محاولة تحويل ميلادي مباشر (فقط للحقول غير الهجرية المتوقعة)
@@ -159,7 +161,6 @@ def clean_data_type(key, value):
                             return result
                             
             except Exception as e:
-                # 💡 التشخيص: طباعة الخطأ الفعلي لـ hijri-converter
                 if is_hijri_expected:
                     st.error(f"❌ خطأ داخلي في تحويل التاريخ الهجري لـ '{key}'. القيمة المنظفة: '{clean_str_base}'. الخطأ: {e}")
                 pass 
@@ -188,7 +189,6 @@ def save_to_db(extracted_data):
     for key in DATA_KEYS:
         value = extracted_data.get(key)
         
-        # هنا يتم تحويل التاريخ والقيم الأخرى
         processed_value = clean_data_type(key, value)
         
         processed_data_for_display[key] = str(processed_value) if isinstance(processed_value, datetime.date) else processed_value
