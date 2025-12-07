@@ -222,25 +222,13 @@ def create_final_report_from_db(records, column_names):
         
     df = pd.DataFrame(records, columns=column_names)
 
-    # إضافة نص الدلالة الكامل للمراجعة في التقرير النهائي
-    if 'رقم الدلالة' in df.columns:
-        def get_delala_description(num):
-            try:
-                num_int = int(str(num).strip())
-                return DELALAT_MAPPING.get(num_int, f"رقم الدلالة {num} غير معروف")
-            except:
-                return "غير محدد"
-                
-        # يتم إدخال العمود الجديد بناءً على رقم الدلالة
-        df.insert(df.columns.get_loc('رقم الدلالة') + 1, 'نص الدلالة المطابقة', df['رقم الدلالة'].apply(get_delala_description))
-
     # إضافة عمود التسلسل
     df.insert(0, '#', range(1, len(df) + 1))
     
     output = io.BytesIO()
     writer = pd.ExcelWriter(output, engine='xlsxwriter')
     
-    sheet_name = 'بيانات البلاغات' 
+    sheet_name = 'التقرير المالي النهائي' 
     
     df.to_excel(writer, sheet_name=sheet_name, index=False)
     
@@ -249,7 +237,8 @@ def create_final_report_from_db(records, column_names):
     col_format = workbook.add_format({'text_wrap': True, 'align': 'right', 'valign': 'top'})
     
     for i, col_name in enumerate(df.columns):
-        if col_name in ['سبب الاشتباه', 'نص الدلالة المطابقة']:
+        # تم تعديل هذا الجزء لتحديد عرض عمود 'سبب الاشتباه' فقط
+        if col_name in ['سبب الاشتباه']:
             worksheet.set_column(i, i, 120, col_format)
         else:
             width = 25 if col_name in ["اسم المشتبه به", "رقم صاحب العمل/ السجل التجاري", "اسم الملف", "وقت الاستخلاص"] else 18
