@@ -7,6 +7,7 @@ from psycopg2 import sql
 import pandas as pd
 import re
 from itertools import permutations 
+import datetime # إضافة مكتبة التاريخ
 
 # محاولة استيراد مكتبة التحويل الهجري
 try:
@@ -73,11 +74,13 @@ def _convert_hijri_to_date(parts_tuple):
 
     # معالجة الأخطاء الشائعة في قراءة السنة الهجرية 
     if y < 1000 and y >= 400:
-        # مثال: 445 تصبح 1445
         y += 1000 
     elif y >= 1 and y <= 99:
-        # مثال: 24 تصبح 1424
-        y += 1400
+        # إذا كانت سنة هجرية ذات رقمين، نفترض أنها في القرن الخامس عشر
+        if y < 46: # مثال: 24 تصبح 1445
+            y += 1400
+        else: # مثال: 99 تصبح 1399
+            y += 1300
     
     # تحقق من نطاق السنة الهجرية المعقول
     if y > 1300 and y < 1500:
@@ -101,17 +104,14 @@ def clean_data_type(key, value):
     # 2. تحويل الأعمدة الرقمية (NUMERIC)
     numeric_fields = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
     if key in numeric_fields:
-        # ... (منطق تحويل الأرقام كما هو) ...
         try:
             cleaned_value = arabic_to_english_numbers(str(value))
             temp_val = re.sub(r'[^\d\.,-]', '', cleaned_value)
-
             last_separator_index = max(temp_val.rfind('.'), temp_val.rfind(','))
             
             if last_separator_index != -1:
                 integer_part = temp_val[:last_separator_index]
                 decimal_part = temp_val[last_separator_index+1:]
-                
                 integer_part = re.sub(r'[,\.]', '', integer_part) 
                 
                 if len(decimal_part) > 2:
@@ -158,15 +158,14 @@ def clean_data_type(key, value):
                     for p in possible_orders:
                         result = _convert_hijri_to_date(p)
                         if result:
-                            # 💡 في حالة النجاح، نرجع التاريخ ونوقف التشخيص
                             return result
                             
             except Exception:
                 pass 
         
-        # 💡 التشخيص (Diagnostic) في حالة الفشل:
-        if key in date_fields:
-             st.warning(f"❌ فشل تحويل التاريخ لـ '{key}'. القيمة الخام: '{value}'. القيمة المنظفة: '{clean_str_base}'.")
+        # 💡 التشخيص: يتم طباعة التحذير فقط إذا كانت القيمة المستخلصة غير فارغة
+        if clean_str_base and key in date_fields:
+             st.warning(f"❌ فشل تحويل التاريخ لـ '{key}'. القيمة الخام: '{value}'. القيمة المنظفة: '{clean_str_base}'. سيتم حفظ NULL.")
              
         return None
 
@@ -180,28 +179,30 @@ def save_to_db(extracted_data):
     if not conn:
         return False
     
-    # 💡 التشخيص: عرض التواريخ الأصلية قبل الحفظ
-    st.info(f"💾 جاري حفظ البيانات. قيم التواريخ الأصلية المستخلصة قبل التحويل:")
-    st.write({
-        'تاريخ الصادر (الخام)': extracted_data.get('تاريخ الصادر'),
-        'تاريخ الوارد (الخام)': extracted_data.get('تاريخ الوارد')
-    })
+    # 💡 التشخيص: تجهيز البيانات المعالجة للعرض
+    processed_data_for_display = {}
+    insert_columns = []
+    insert_values = []
+    
+    for key in DATA_KEYS:
+        value = extracted_data.get(key)
+        
+        # هنا يتم تحويل التاريخ والقيم الأخرى
+        processed_value = clean_data_type(key, value)
+        
+        processed_data_for_display[key] = str(processed_value) if isinstance(processed_value, datetime.date) else processed_value
+
+        insert_columns.append(sql.Identifier(key))
+        insert_values.append(sql.Literal(processed_value))
+
+    # 💡 التشخيص: عرض البيانات بعد المعالجة وقبل الحفظ
+    st.info("✅ هذه هي البيانات النهائية التي سيتم حفظها في قاعدة البيانات:")
+    st.json(processed_data_for_display)
+
     
     try:
         cur = conn.cursor()
         
-        insert_columns = []
-        insert_values = []
-        
-        for key in DATA_KEYS:
-            value = extracted_data.get(key)
-            
-            processed_value = clean_data_type(key, value)
-
-            insert_columns.append(sql.Identifier(key))
-            insert_values.append(sql.Literal(processed_value))
-            
-
         columns_sql = sql.SQL(', ').join(insert_columns)
         values_list = sql.SQL(', ').join(insert_values)
 
@@ -222,7 +223,6 @@ def save_to_db(extracted_data):
         return True
     except Exception as e:
         st.error(f"❌ حدث خطأ أثناء حفظ البيانات: {e}")
-        # 💡 التشخيص: أخطاء قاعدة البيانات
         if 'does not exist' in str(e):
              st.error("💡 ملاحظة: إذا ظهر هذا الخطأ، فتأكد أنك تستخدم حروفاً عربية صحيحة لاسم الجدول والأعمدة في قاعدة البيانات (مثل 'تاريخ الصادر') وأن نوع العمود هو DATE.")
         
