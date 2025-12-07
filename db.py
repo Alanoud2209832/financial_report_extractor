@@ -85,7 +85,6 @@ def _convert_hijri_to_date(parts_tuple):
         if 1 <= m <= 12 and 1 <= d <= 30:
             try:
                 gregorian_date = Hijri(y, m, d).to_gregorian()
-                # 💡 التصحيح الحاسم: حذف .date() الزائدة
                 return gregorian_date 
             except Exception:
                 return None
@@ -136,18 +135,15 @@ def clean_data_type(key, value):
         date_str = arabic_to_english_numbers(str(value))
         clean_str_base = re.sub(r'[^\d/\-.]', '', date_str).strip()
         
-        is_hijri_expected = key in ["تاريخ الصادر", "تاريخ الوارد", "تاريخ الدارسة من", "تاريخ الدراسة الى"]
-
-        # أ. محاولة تحويل ميلادي مباشر (فقط للحقول غير الهجرية المتوقعة)
-        if not is_hijri_expected:
-            try:
-                date_obj = pd.to_datetime(clean_str_base, errors='coerce', dayfirst=False)
-                if pd.notna(date_obj) and date_obj.year > 1800:
-                    return date_obj.date()
-            except Exception:
-                pass
+        # 💡 محاولة 1: التحويل الميلادي المباشر (لجميع الحقول)
+        try:
+            date_obj = pd.to_datetime(clean_str_base, errors='coerce', dayfirst=False)
+            if pd.notna(date_obj) and date_obj.year > 1800:
+                return date_obj.date()
+        except Exception:
+            pass
         
-        # ب. محاولة التحويل الهجري (المنطق الأساسي الآن)
+        # 💡 محاولة 2: التحويل الهجري (باستخدام الترتيبات)
         if Hijri:
             try:
                 parts = [p for p in re.split(r'[/\-.]', clean_str_base) if p.strip()] 
@@ -161,11 +157,11 @@ def clean_data_type(key, value):
                             return result
                             
             except Exception as e:
-                if is_hijri_expected:
-                    st.error(f"❌ خطأ داخلي في تحويل التاريخ الهجري لـ '{key}'. القيمة المنظفة: '{clean_str_base}'. الخطأ: {e}")
+                # 💡 نترك رسالة الخطأ لتشخيص أي فشل غير متوقع
+                st.error(f"❌ خطأ داخلي في تحويل التاريخ الهجري لـ '{key}'. القيمة المنظفة: '{clean_str_base}'. الخطأ: {e}")
                 pass 
         
-        # 💡 التشخيص النهائي: إذا فشل كل شيء والقيمة غير فارغة، أظهر تحذير
+        # 💡 التشخيص النهائي: إذا فشل كل شيء
         if clean_str_base and key in date_fields:
              st.warning(f"❌ فشل تحويل التاريخ لـ '{key}'. القيمة الخام: '{value}'. القيمة المنظفة: '{clean_str_base}'. سيتم حفظ NULL.")
              
