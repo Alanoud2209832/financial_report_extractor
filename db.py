@@ -146,12 +146,15 @@ def clean_data_type(key, value):
         date_str = arabic_to_english_numbers(str(value))
         clean_str_base = re.sub(r'[^\d/\-.]', '', date_str).strip()
         
-        is_hijri_expected = key in ["تاريخ الصادر", "تاريخ الوارد", "تاريخ الدارسة من", "تاريخ الدراسة الى"]
+        # ⚠️ التعديل الرئيسي: حصر التواريخ المتوقع أن تكون هجرية في الصادر والوارد فقط.
+        # هذا يسمح لـ (الدارسة من/الى) بالتحويل الميلادي المباشر أولاً.
+        is_hijri_expected = key in ["تاريخ الصادر", "تاريخ الوارد"] 
 
         # أ. محاولة تحويل ميلادي مباشر
-        if not is_hijri_expected:
+        if not is_hijri_expected: 
             try:
-                date_obj = pd.to_datetime(clean_str_base, errors='coerce', dayfirst=False)
+                # يرجى ملاحظة: قد تحتاج إلى تبديل dayfirst=False إلى dayfirst=True إذا كانت تواريخك تأتي بصيغة يوم/شهر/سنة.
+                date_obj = pd.to_datetime(clean_str_base, errors='coerce', dayfirst=False) 
                 if pd.notna(date_obj) and date_obj.year > 1800:
                     return date_obj.date()
             except Exception:
@@ -231,6 +234,8 @@ def save_to_db(extracted_data):
         # يتم عرض هذا الخطأ في app.py
         if 'does not exist' in str(e) and 'رقم الدلالة' in str(e):
              st.error("💡 ملاحظة: إذا ظهر هذا الخطأ، فتأكد أنك أنشأت عمود 'رقم الدلالة' في جدول PostgreSQL الخاص بك بنوع **INTEGER**.")
+        
+        st.error(f"❌ فشل الحفظ في قاعدة البيانات: {e}")
         
         if conn:
             conn.rollback()
