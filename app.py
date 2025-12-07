@@ -332,31 +332,35 @@ def main():
         
         if st.button("🚀 بدء الاستخلاص"):
             
-            extraction_tasks = []
-            for uploaded_file in uploaded_files:
+            total_files = len(uploaded_files)
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            processed_count = 0
+            
+            # 💡 رسالة واضحة أن المعالجة ستكون تسلسلية وهادئة
+            status_text.info(f"⏳ بدء استخلاص {total_files} ملفات بالتسلسل. سيأخذ كل ملف الوقت اللازم للاستخلاص...")
+            
+            for i, uploaded_file in enumerate(uploaded_files):
                 file_bytes, file_name = uploaded_file.read(), uploaded_file.name
                 file_type = file_name.split('.')[-1].lower()
-                extraction_tasks.append((file_bytes, file_name, file_type))
 
-            st.info(f"⏳ جاري معالجة {len(extraction_tasks)} ملفات بالتوازي... قد يستغرق هذا بعض الوقت.")
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                results = [executor.submit(extract_financial_data, bytes, name, type) 
-                           for bytes, name, type in extraction_tasks]
+                # تحديث الحالة للملف الحالي
+                status_text.info(f"⏳ جاري معالجة الملف **{file_name}** ({i+1} من {total_files}).")
                 
-                progress_bar = st.progress(0)
-                processed_count = 0
+                data = extract_financial_data(file_bytes, file_name, file_type)
+                
+                if data:
+                    all_extracted_data.append(data)
+                    st.success(f"✅ تم استخلاص البيانات من **{file_name}** بنجاح.")
+                else:
+                    st.warning(f"⚠️ فشل استخلاص البيانات من **{file_name}**. يرجى مراجعة رسائل الخطأ.")
 
-                for future in concurrent.futures.as_completed(results):
-                    data = future.result()
-                    if data:
-                        all_extracted_data.append(data)
-                        st.success(f"✅ تم الاستخلاص من '{data['اسم الملف']}' بنجاح!")
-                    
-                    processed_count += 1
-                    progress_bar.progress(processed_count / len(extraction_tasks))
-            
+                processed_count += 1
+                progress_bar.progress(processed_count / total_files)
+
+            # رسائل النهاية
             if all_extracted_data:
+                status_text.success(f"✅ اكتمل استخلاص جميع الملفات ({len(all_extracted_data)} ملفات).")
                 
                 new_df = pd.DataFrame(all_extracted_data)
                 
@@ -368,7 +372,8 @@ def main():
                     ignore_index=True
                 )
             else:
-                st.error("❌ فشل استخلاص أي بيانات. يرجى مراجعة الأخطاء أعلاه.")
+                status_text.error("❌ فشل استخلاص أي بيانات. يرجى مراجعة الأخطاء أعلاه.")
+                progress_bar.empty()
 
 
     # ======================================================
