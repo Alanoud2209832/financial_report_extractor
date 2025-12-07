@@ -65,8 +65,6 @@ def _convert_hijri_to_date(parts_tuple):
         return None
         
     try:
-        # تحويل الأجزاء إلى أرقام، وإزالة أي رموز غير رقمية
-        # نفترض أن الترتيب الحالي للـ tuple هو (Y, M, D)
         y_str, m_str, d_str = [re.sub(r'[^\d]', '', p) for p in parts_tuple]
         y, m, d = int(y_str), int(m_str), int(d_str)
     except ValueError:
@@ -74,24 +72,20 @@ def _convert_hijri_to_date(parts_tuple):
 
     # معالجة الأخطاء الشائعة في قراءة السنة الهجرية 
     if y < 1000 and y >= 400:
-        # مثال: 445 تصبح 1445
         y += 1000 
     elif y >= 1 and y <= 99:
-        # 💡 تم تعزيز هذا الجزء: نفترض القرن الحالي (1400)
-        if y < 60: # مثال: 45 تصبح 1445
+        if y < 60: 
             y += 1400
-        else: # مثال: 88 تصبح 1388
+        else:
             y += 1300
     
     # تحقق من نطاق السنة الهجرية المعقول
     if y > 1300 and y < 1500:
         # تحقق بسيط من نطاق الشهر واليوم قبل استخدام المكتبة
         if 1 <= m <= 12 and 1 <= d <= 30:
-            try:
-                gregorian_date = Hijri(y, m, d).to_gregorian()
-                return gregorian_date.date()
-            except Exception:
-                return None
+            # 💡 يتم التحويل الفعلي هنا
+            gregorian_date = Hijri(y, m, d).to_gregorian()
+            return gregorian_date.date()
                 
     return None
 
@@ -139,22 +133,24 @@ def clean_data_type(key, value):
         date_str = arabic_to_english_numbers(str(value))
         clean_str_base = re.sub(r'[^\d/\-.]', '', date_str).strip()
         
-        # أ. محاولة تحويل ميلادي مباشر
-        try:
-            date_obj = pd.to_datetime(clean_str_base, errors='coerce', dayfirst=False)
-            if pd.notna(date_obj) and date_obj.year > 1800:
-                return date_obj.date()
-        except Exception:
-            pass
+        # 💡 تحديد ما إذا كان التاريخ متوقع أن يكون هجرياً (لتعطيل محاولة التحويل الميلادي الخاطئة)
+        is_hijri_expected = key in ["تاريخ الصادر", "تاريخ الوارد", "تاريخ الدارسة من", "تاريخ الدراسة الى"]
+
+        # أ. محاولة تحويل ميلادي مباشر (فقط للحقول غير الهجرية المتوقعة)
+        if not is_hijri_expected:
+            try:
+                date_obj = pd.to_datetime(clean_str_base, errors='coerce', dayfirst=False)
+                if pd.notna(date_obj) and date_obj.year > 1800:
+                    return date_obj.date()
+            except Exception:
+                pass
         
-        # ب. محاولة التحويل الهجري 
+        # ب. محاولة التحويل الهجري (المنطق الأساسي الآن)
         if Hijri:
             try:
-                # 💡 تنظيف الفواصل بشكل أقوى
                 parts = [p for p in re.split(r'[/\-.]', clean_str_base) if p.strip()] 
                 
                 if len(parts) == 3:
-                    
                     possible_orders = set(permutations(parts))
 
                     for p in possible_orders:
@@ -162,10 +158,13 @@ def clean_data_type(key, value):
                         if result:
                             return result
                             
-            except Exception:
+            except Exception as e:
+                # 💡 التشخيص: طباعة الخطأ الفعلي لـ hijri-converter
+                if is_hijri_expected:
+                    st.error(f"❌ خطأ داخلي في تحويل التاريخ الهجري لـ '{key}'. القيمة المنظفة: '{clean_str_base}'. الخطأ: {e}")
                 pass 
         
-        # 💡 التشخيص: يتم طباعة التحذير فقط إذا كانت القيمة المستخلصة غير فارغة
+        # 💡 التشخيص النهائي: إذا فشل كل شيء والقيمة غير فارغة، أظهر تحذير
         if clean_str_base and key in date_fields:
              st.warning(f"❌ فشل تحويل التاريخ لـ '{key}'. القيمة الخام: '{value}'. القيمة المنظفة: '{clean_str_base}'. سيتم حفظ NULL.")
              
@@ -192,7 +191,6 @@ def save_to_db(extracted_data):
         # هنا يتم تحويل التاريخ والقيم الأخرى
         processed_value = clean_data_type(key, value)
         
-        # إذا كان التاريخ قد تم تحويله بنجاح إلى تاريخ ميلادي، سيظهر بتنسيق YYYY-MM-DD
         processed_data_for_display[key] = str(processed_value) if isinstance(processed_value, datetime.date) else processed_value
 
         insert_columns.append(sql.Identifier(key))
