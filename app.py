@@ -307,7 +307,10 @@ def main():
             st.info(f"⏳ جاري معالجة {len(extraction_tasks)} ملفات بالتوازي... قد يستغرق هذا بعض الوقت.")
 
             # 💡 استخدام المعالج المتوازي (Threads) لتسريع الاستخلاص
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+
+
+            # 💡 تقليل عدد العمال إلى 2 فقط
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                 results = [executor.submit(extract_financial_data, bytes, name, type) 
                            for bytes, name, type in extraction_tasks]
                 
