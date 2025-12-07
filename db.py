@@ -6,6 +6,7 @@ import streamlit as st
 from psycopg2 import sql
 import pandas as pd
 import re
+from itertools import permutations # تم إضافة مكتبة التباديل لزيادة مرونة قراءة التاريخ
 
 # محاولة استيراد مكتبة التحويل الهجري
 try:
@@ -55,6 +56,40 @@ def connect_db():
         st.error(f"❌ فشل الاتصال بقاعدة البيانات: {e}")
         return None
 
+def _convert_hijri_to_date(parts_tuple):
+    """
+    دالة مساعدة: تحاول تحويل جزء من التاريخ (المفترض أنه سنة، شهر، يوم) إلى تاريخ ميلادي.
+    """
+    if not Hijri or len(parts_tuple) != 3:
+        return None
+        
+    try:
+        # تحويل الأجزاء إلى أرقام، وإزالة أي رموز غير رقمية
+        # نفترض أن الترتيب الحالي للـ tuple هو (Y, M, D)
+        y_str, m_str, d_str = [re.sub(r'[^\d]', '', p) for p in parts_tuple]
+        y, m, d = int(y_str), int(m_str), int(d_str)
+    except ValueError:
+        return None
+
+    # معالجة الأخطاء الشائعة في قراءة السنة الهجرية (مثل تحويل 445 إلى 1445)
+    if y < 1000 and y >= 400:
+        y += 1000 
+    # في حال استخلاص رقمين للسنة فقط (مثل 22)
+    elif y >= 1 and y <= 99:
+        y += 1400
+    
+    # تحقق من نطاق السنة الهجرية المعقول
+    if y > 1300 and y < 1500:
+        # تحقق بسيط من نطاق الشهر واليوم قبل استخدام المكتبة
+        if 1 <= m <= 12 and 1 <= d <= 30:
+            try:
+                gregorian_date = Hijri(y, m, d).to_gregorian()
+                return gregorian_date.date()
+            except Exception:
+                # قد تفشل المكتبة لأسباب مثل يوم 30 في شهر لا يحتمله
+                return None
+                
+    return None
 
 def clean_data_type(key, value):
     """تنظيف وتحويل القيم إلى تنسيقات صالحة لـ PostgreSQL."""
@@ -63,7 +98,7 @@ def clean_data_type(key, value):
     if value is None or value == 'غير متوفر' or value == '' or pd.isna(value):
         return None
 
-    # 2. تحويل الأعمدة الرقمية (NUMERIC)
+    # 2. تحويل الأعمدة الرقمية (NUMERIC) - (المنطق سليم وتم إبقاؤه)
     numeric_fields = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
     if key in numeric_fields:
         try:
@@ -110,46 +145,23 @@ def clean_data_type(key, value):
         except Exception:
             pass
         
-        # ب. محاولة التحويل الهجري (تم التعديل هنا ليدعم ترتيب Y/M/D و D/M/Y)
+        # ب. محاولة التحويل الهجري (التعديل الرئيسي)
         if Hijri:
             try:
                 parts = [p for p in re.split(r'[/\-.]', clean_str_base) if p.strip()] 
                 
                 if len(parts) == 3:
                     
-                    # 1. الافتراض الأول: Y/M/D (كما كان مفترضاً في الكود الأصلي)
-                    y_str_attempt, m_str, d_str_attempt = parts 
-                    
-                    # 2. إنشاء قائمة بالترتيبات المحتملة (Y, M, D) للتحقق منها
-                    possible_dates = []
+                    # 💡 تجربة جميع الترتيبات الستة المحتملة (Y, M, D)
+                    # نستخدم مجموعة (set) لضمان فريدة الترتيبات
+                    possible_orders = set(permutations(parts))
 
-                    # إضافة الافتراض الأول: Y, M, D
-                    possible_dates.append((y_str_attempt, m_str, d_str_attempt))
-                    
-                    # إضافة الافتراض البديل: D, M, Y (يتم تبديل Y و D) إذا كان الجزء الأول قصيراً
-                    if len(y_str_attempt) < 4 and len(d_str_attempt) == 4:
-                        possible_dates.append((d_str_attempt, m_str, y_str_attempt))
-
-                    for y_str, m_str, d_str in possible_dates:
-                        try:
-                            y = int(re.sub(r'[^\d]', '', y_str))
-                            m = int(re.sub(r'[^\d]', '', m_str))
-                            d = int(re.sub(r'[^\d]', '', d_str))
-                        except ValueError:
-                            continue # فشل استخلاص الأرقام
-
-                        # معالجة الأخطاء الشائعة في قراءة سنة ١٤٤x (من الكود الأصلي)
-                        if y >= 400 and y <= 500:
-                            y += 1000 
-                        elif y >= 900 and y <= 999:
-                            y = 1400 + (y % 100)
+                    for p in possible_orders:
+                        # يتم تمرير الترتيب p على أساس (سنة، شهر، يوم) ليتم التحقق منه داخل الدالة المساعدة
+                        result = _convert_hijri_to_date(p)
+                        if result:
+                            return result
                             
-                        if y > 1300 and y < 1500:
-                            # التحقق البسيط قبل التحويل
-                            if 1 <= m <= 12 and 1 <= d <= 30:
-                                gregorian_date = Hijri(y, m, d).to_gregorian()
-                                return gregorian_date.date()
-                                
             except Exception:
                 pass 
 
