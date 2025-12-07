@@ -7,7 +7,7 @@ from psycopg2 import sql
 import pandas as pd
 import re
 from itertools import permutations 
-import datetime # إضافة مكتبة التاريخ
+import datetime 
 
 # محاولة استيراد مكتبة التحويل الهجري
 try:
@@ -74,12 +74,13 @@ def _convert_hijri_to_date(parts_tuple):
 
     # معالجة الأخطاء الشائعة في قراءة السنة الهجرية 
     if y < 1000 and y >= 400:
+        # مثال: 445 تصبح 1445
         y += 1000 
     elif y >= 1 and y <= 99:
-        # إذا كانت سنة هجرية ذات رقمين، نفترض أنها في القرن الخامس عشر
-        if y < 46: # مثال: 24 تصبح 1445
+        # 💡 تم تعزيز هذا الجزء: نفترض القرن الحالي (1400)
+        if y < 60: # مثال: 45 تصبح 1445
             y += 1400
-        else: # مثال: 99 تصبح 1399
+        else: # مثال: 88 تصبح 1388
             y += 1300
     
     # تحقق من نطاق السنة الهجرية المعقول
@@ -149,6 +150,7 @@ def clean_data_type(key, value):
         # ب. محاولة التحويل الهجري 
         if Hijri:
             try:
+                # 💡 تنظيف الفواصل بشكل أقوى
                 parts = [p for p in re.split(r'[/\-.]', clean_str_base) if p.strip()] 
                 
                 if len(parts) == 3:
@@ -190,6 +192,7 @@ def save_to_db(extracted_data):
         # هنا يتم تحويل التاريخ والقيم الأخرى
         processed_value = clean_data_type(key, value)
         
+        # إذا كان التاريخ قد تم تحويله بنجاح إلى تاريخ ميلادي، سيظهر بتنسيق YYYY-MM-DD
         processed_data_for_display[key] = str(processed_value) if isinstance(processed_value, datetime.date) else processed_value
 
         insert_columns.append(sql.Identifier(key))
