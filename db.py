@@ -6,7 +6,7 @@ import streamlit as st
 from psycopg2 import sql
 import pandas as pd
 import re
-from itertools import permutations # تم إضافة مكتبة التباديل لزيادة مرونة قراءة التاريخ
+from itertools import permutations 
 
 # محاولة استيراد مكتبة التحويل الهجري
 try:
@@ -71,11 +71,12 @@ def _convert_hijri_to_date(parts_tuple):
     except ValueError:
         return None
 
-    # معالجة الأخطاء الشائعة في قراءة السنة الهجرية (مثل تحويل 445 إلى 1445)
+    # معالجة الأخطاء الشائعة في قراءة السنة الهجرية 
     if y < 1000 and y >= 400:
+        # مثال: 445 تصبح 1445
         y += 1000 
-    # في حال استخلاص رقمين للسنة فقط (مثل 22)
     elif y >= 1 and y <= 99:
+        # مثال: 24 تصبح 1424
         y += 1400
     
     # تحقق من نطاق السنة الهجرية المعقول
@@ -86,7 +87,6 @@ def _convert_hijri_to_date(parts_tuple):
                 gregorian_date = Hijri(y, m, d).to_gregorian()
                 return gregorian_date.date()
             except Exception:
-                # قد تفشل المكتبة لأسباب مثل يوم 30 في شهر لا يحتمله
                 return None
                 
     return None
@@ -98,9 +98,10 @@ def clean_data_type(key, value):
     if value is None or value == 'غير متوفر' or value == '' or pd.isna(value):
         return None
 
-    # 2. تحويل الأعمدة الرقمية (NUMERIC) - (المنطق سليم وتم إبقاؤه)
+    # 2. تحويل الأعمدة الرقمية (NUMERIC)
     numeric_fields = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
     if key in numeric_fields:
+        # ... (منطق تحويل الأرقام كما هو) ...
         try:
             cleaned_value = arabic_to_english_numbers(str(value))
             temp_val = re.sub(r'[^\d\.,-]', '', cleaned_value)
@@ -145,26 +146,28 @@ def clean_data_type(key, value):
         except Exception:
             pass
         
-        # ب. محاولة التحويل الهجري (التعديل الرئيسي)
+        # ب. محاولة التحويل الهجري 
         if Hijri:
             try:
                 parts = [p for p in re.split(r'[/\-.]', clean_str_base) if p.strip()] 
                 
                 if len(parts) == 3:
                     
-                    # 💡 تجربة جميع الترتيبات الستة المحتملة (Y, M, D)
-                    # نستخدم مجموعة (set) لضمان فريدة الترتيبات
                     possible_orders = set(permutations(parts))
 
                     for p in possible_orders:
-                        # يتم تمرير الترتيب p على أساس (سنة، شهر، يوم) ليتم التحقق منه داخل الدالة المساعدة
                         result = _convert_hijri_to_date(p)
                         if result:
+                            # 💡 في حالة النجاح، نرجع التاريخ ونوقف التشخيص
                             return result
                             
             except Exception:
                 pass 
-
+        
+        # 💡 التشخيص (Diagnostic) في حالة الفشل:
+        if key in date_fields:
+             st.warning(f"❌ فشل تحويل التاريخ لـ '{key}'. القيمة الخام: '{value}'. القيمة المنظفة: '{clean_str_base}'.")
+             
         return None
 
     # 4. القيم الأخرى (VARCHAR/TEXT)
@@ -176,6 +179,13 @@ def save_to_db(extracted_data):
     conn = connect_db()
     if not conn:
         return False
+    
+    # 💡 التشخيص: عرض التواريخ الأصلية قبل الحفظ
+    st.info(f"💾 جاري حفظ البيانات. قيم التواريخ الأصلية المستخلصة قبل التحويل:")
+    st.write({
+        'تاريخ الصادر (الخام)': extracted_data.get('تاريخ الصادر'),
+        'تاريخ الوارد (الخام)': extracted_data.get('تاريخ الوارد')
+    })
     
     try:
         cur = conn.cursor()
@@ -208,9 +218,14 @@ def save_to_db(extracted_data):
         conn.commit()
         cur.close()
         conn.close()
+        st.success("✅ تم حفظ السجل بنجاح في قاعدة البيانات!")
         return True
     except Exception as e:
         st.error(f"❌ حدث خطأ أثناء حفظ البيانات: {e}")
+        # 💡 التشخيص: أخطاء قاعدة البيانات
+        if 'does not exist' in str(e):
+             st.error("💡 ملاحظة: إذا ظهر هذا الخطأ، فتأكد أنك تستخدم حروفاً عربية صحيحة لاسم الجدول والأعمدة في قاعدة البيانات (مثل 'تاريخ الصادر') وأن نوع العمود هو DATE.")
+        
         if conn:
             conn.rollback()
             conn.close()
