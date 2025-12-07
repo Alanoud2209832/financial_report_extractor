@@ -330,23 +330,25 @@ def main():
     # ======================================================
     # 📋 جدول البيانات بعد الاستخلاص + قابل للتعديل
     # ======================================================
-    if not st.session_state['extracted_data_df'].empty:
-        st.subheader("✏️ جميع البيانات المستخلصة (قابلة للتعديل)")
+if not st.session_state['extracted_data_df'].empty:
+    st.subheader("✏️ جميع البيانات المستخلصة (قابلة للتعديل)")
 
-        edited_df = st.data_editor(
-            st.session_state['extracted_data_df'],
-            use_container_width=True,
-            num_rows="dynamic"
-        )
+    edited_df = st.data_editor(
+        st.session_state['extracted_data_df'],
+        use_container_width=True,
+        num_rows="dynamic"
+    )
 
-        st.markdown("---")
+    st.markdown("---")
 
-        # زر الحفظ
-        if st.button("💾 تأكيد وحفظ التعديلات في قاعدة البيانات"):
-            saved_count = 0
-            total_rows = len(edited_df)
-            status_placeholder = st.empty() 
+    # 💡 تأكد أن زر الحفظ (Save Button) يظهر هنا داخل هذا الشرط
+    # يجب أن يكون هذا الزر موجوداً مباشرة بعد st.markdown("---")
+    if st.button("💾 تأكيد وحفظ التعديلات في قاعدة البيانات"):
+        saved_count = 0
+        total_rows = len(edited_df)
+        status_placeholder = st.empty() 
 
+        for index, row in edited_df.iterrows():
             for index, row in edited_df.iterrows():
                 row_data = dict(row)
                 
