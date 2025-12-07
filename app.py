@@ -293,12 +293,14 @@ def main():
         accept_multiple_files=True
     )
 
-    if uploaded_files:
+if uploaded_files:
         all_extracted_data = []
         
-        if st.button("🚀 بدء الاستخلاص"):
+        # مستوى المسافة البادئة 1 (لـ if st.button)
+        if st.button("🚀 بدء الاستخلاص"): 
             
             extraction_tasks = []
+            # مستوى المسافة البادئة 2 (لـ for uploaded_file)
             for uploaded_file in uploaded_files:
                 file_bytes, file_name = uploaded_file.read(), uploaded_file.name
                 file_type = file_name.split('.')[-1].lower()
@@ -306,11 +308,10 @@ def main():
 
             st.info(f"⏳ جاري معالجة {len(extraction_tasks)} ملفات بالتوازي... قد يستغرق هذا بعض الوقت.")
 
-            # 💡 استخدام المعالج المتوازي (Threads) لتسريع الاستخلاص
-
-
-            # 💡 تقليل عدد العمال إلى 2 فقط
-                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            # مستوى المسافة البادئة 2 (يجب أن يكون هنا) 
+            # 💡 تأكدي أن هذا السطر يبدأ بنفس محاذاة 'extraction_tasks = []' و 'st.info(...)'
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor: 
+                # مستوى المسافة البادئة 3 (داخل كتلة with)
                 results = [executor.submit(extract_financial_data, bytes, name, type) 
                            for bytes, name, type in extraction_tasks]
                 
