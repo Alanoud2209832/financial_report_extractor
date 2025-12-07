@@ -13,7 +13,7 @@ import datetime
 try:
     from hijri_converter import Hijri
 except ImportError:
-    st.warning("⚠️ مكتبة hijri-converter غير متوفرة. التواريخ الهجرية قد لا يتم تحويلها بشكل صحيح. يرجى تثبيتها عبر 'pip install hijri-converter'.")
+    # لا نوقف التنفيذ، فقط نترك تحذير
     Hijri = None
 
 load_dotenv()
@@ -27,7 +27,7 @@ DB_COLUMN_NAMES = [
     "رقم الوارد", "تاريخ الوارد", "رقم صاحب العمل/ السجل التجاري",
     "سبب الاشتباه", "تاريخ الدارسة من", "تاريخ الدراسة الى",
     "إجمالي إيداع الدراسة",
-    "رقم الدلالة", # 💡 العمود الجديد
+    "رقم الدلالة", # العمود الجديد
     "اسم الملف",
     "وقت الاستخلاص"
 ]
@@ -50,7 +50,7 @@ def connect_db():
     """ينشئ اتصالًا بقاعدة البيانات."""
     try:
         if not DB_URL:
-            st.error("❌ متغير DATABASE_URL غير موجود. يرجى مراجعة ملف .env")
+            # st.error("❌ متغير DATABASE_URL غير موجود. يرجى مراجعة ملف .env")
             return None
         conn = psycopg2.connect(DB_URL, sslmode='require')
         return conn
@@ -96,22 +96,25 @@ def clean_data_type(key, value):
     
     # 1. التعامل مع القيم الفارغة
     if value is None or value == 'غير متوفر' or value == '' or pd.isna(value):
-        # 💡 تم تعديل: يجب أن تكون قيمة رقم الدلالة المحفوظة هي None (PostgreSQL NULL) وليست نص 'غير متوفر'
-        if key == "رقم الدلالة": 
-            return None
         return None
 
-    # 2. تحويل الأعمدة الرقمية (NUMERIC)
+    # 2. تحويل الأعمدة الرقمية (NUMERIC/INTEGER)
     numeric_fields = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
     
-    # 💡 يتم تطبيق تحويل الرقم على 'رقم الدلالة' أيضاً
+    # يتم تطبيق تحويل الرقم على 'رقم الدلالة'
     if key in numeric_fields or key == "رقم الدلالة":
         try:
             cleaned_value = arabic_to_english_numbers(str(value))
-            # إذا كان رقم الدلالة، حاول التحويل إلى Integer
+            
+            # منطق رقم الدلالة (يجب أن يكون INTEGER)
             if key == "رقم الدلالة":
-                num = int(re.sub(r'[^\d]', '', cleaned_value))
-                return num if 1 <= num <= 11 else None # حفظ قيمة NULL إذا كانت خارج النطاق
+                # ننظف من أي أحرف غير رقمية
+                num_str = re.sub(r'[^\d]', '', cleaned_value)
+                if not num_str:
+                    return None
+                num = int(num_str)
+                # حفظ قيمة NULL إذا كانت خارج النطاق (1-11)
+                return num if 1 <= num <= 11 else None 
             
             # منطق الأرقام المالية (المتغير)
             temp_val = re.sub(r'[^\d\.,-]', '', cleaned_value)
@@ -171,12 +174,10 @@ def clean_data_type(key, value):
                             return result
                             
             except Exception as e:
-                if is_hijri_expected:
-                    st.error(f"❌ خطأ داخلي في تحويل التاريخ الهجري لـ '{key}'. القيمة المنظفة: '{clean_str_base}'. الخطأ: {e}")
                 pass 
         
         if clean_str_base and key in date_fields:
-            st.warning(f"❌ فشل تحويل التاريخ لـ '{key}'. القيمة الخام: '{value}'. القيمة المنظفة: '{clean_str_base}'. سيتم حفظ NULL.")
+            pass
             
         return None
 
@@ -195,6 +196,7 @@ def save_to_db(extracted_data):
     insert_values = []
     
     for key in DATA_KEYS:
+        # التأكد من أن المفتاح موجود في extracted_data
         value = extracted_data.get(key)
         
         processed_value = clean_data_type(key, value)
@@ -227,12 +229,11 @@ def save_to_db(extracted_data):
         conn.commit()
         cur.close()
         conn.close()
-        st.success("✅ تم حفظ السجل بنجاح في قاعدة البيانات!")
         return True
     except Exception as e:
-        st.error(f"❌ حدث خطأ أثناء حفظ البيانات: {e}")
-        if 'does not exist' in str(e):
-             st.error("💡 ملاحظة: إذا ظهر هذا الخطأ، فتأكد أنك تستخدم حروفاً عربية صحيحة لاسم الجدول والأعمدة في قاعدة البيانات (مثل 'تاريخ الصادر') وأن نوع العمود هو DATE/NUMERIC/TEXT.")
+        # st.error(f"❌ حدث خطأ أثناء حفظ البيانات: {e}") # يتم عرضها في app.py
+        if 'does not exist' in str(e) and 'رقم الدلالة' in str(e):
+             st.error("💡 ملاحظة: إذا ظهر هذا الخطأ، فتأكد أنك أنشأت عمود 'رقم الدلالة' في جدول PostgreSQL الخاص بك بنوع **INTEGER**.")
         
         if conn:
             conn.rollback()
@@ -248,11 +249,15 @@ def fetch_all_reports():
     try:
         cur = conn.cursor()
         
-        select_query = sql.SQL('SELECT * FROM public.تقارير_الاشتباه')
+        # التأكد من جلب جميع الأعمدة المحددة لكي يتطابق مع DataFrame في app.py
+        select_columns = sql.SQL(', ').join([sql.Identifier(col) for col in DB_COLUMN_NAMES])
+
+        select_query = sql.SQL('SELECT id, {columns} FROM public.تقارير_الاشتباه').format(columns=select_columns)
         
         cur.execute(select_query)
         
-        column_names = [desc[0] for desc in cur.description]
+        # يجب دمج عمود id مع أسماء الأعمدة الأخرى
+        column_names = ['id'] + [desc[0] for desc in cur.description[1:]] 
         records = cur.fetchall()
         
         cur.close()
