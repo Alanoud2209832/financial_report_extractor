@@ -19,6 +19,9 @@ load_dotenv()
 # ===============================
 # إعدادات OpenAI
 # ===============================
+# هذا هو الكود الذي يجب تعديله إذا كان موجوداً:
+# (يرجح أنه موجود في ملف app.py ضمن قسم إعدادات API)
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
 if not OPENAI_API_KEY:
     st.error("❌ مفتاح OPENAI_API_KEY غير موجود. أضفه في ملف .env (انظر .env.example).")
