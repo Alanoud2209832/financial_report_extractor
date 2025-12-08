@@ -8,8 +8,7 @@ import re
 import pytz 
 import time 
 import concurrent.futures 
-from google import genai
-from google.genai.errors import APIError
+from openai import OpenAI, APIError # التعديل: استيراد من مكتبة openai
 from dotenv import load_dotenv
 
 # محاولة استيراد الدوال من db.py
@@ -19,12 +18,17 @@ except ImportError:
     st.error("❌ فشل استيراد db.py. تأكد من وجود الملف وأن الدوال (save_to_db, fetch_all_reports) معرفة فيه.")
 
 # ===============================
-# 1. إعدادات API
+# 1. إعدادات API (محدثة لـ OpenAI Compatibility)
 # ===============================
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyBmJnwohN1Vtq9dsRriq51NhyCpOzAdMeI") 
+# يمكن للعميل استخدام مفتاح Gemini API هنا
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "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") 
 if not GEMINI_API_KEY:
     st.error("❌ مفتاح GEMINI_API_KEY غير موجود. يرجى إضافته إلى ملف .env.")
     
+# التعديل: نقطة النهاية المتوافقة مع OpenAI لـ Gemini
+OPENAI_BASE_URL = "https://api.google.com/v1" 
+
+# اسم النموذج
 MODEL_NAME = 'gemini-2.5-flash-preview-09-2025'
 
 REPORT_FIELDS_ARABIC = [
@@ -38,12 +42,12 @@ REPORT_FIELDS_ARABIC = [
 ]
 
 RESPONSE_SCHEMA = {
-    "type": "OBJECT",
+    "type": "object", # التعديل: تغيير من OBJECT إلى object حسب مخطط OpenAPI
     "properties": {
-        field: {"type": "STRING", "description": f"القيمة المستخلصة لـ: {field}"}
+        field: {"type": "string", "description": f"القيمة المستخلصة لـ: {field}"}
         for field in REPORT_FIELDS_ARABIC
     },
-    "propertyOrdering": REPORT_FIELDS_ARABIC
+    "required": REPORT_FIELDS_ARABIC # إضافة required لضمان استخلاص جميع الحقول
 }
 
 DELALAT_MAPPING = {
@@ -145,37 +149,79 @@ def check_for_suspicion(data):
         val = data.get(field, "")
         if str(val).strip() in ['0', '0.00', '٠', '٠,٠٠']:
              suspicion_indicator += f"⚠️ ({field} = 0) "
-             
+            
     return suspicion_indicator.strip() or "✅ سليم"
 
 # ===============================
-# 2. وظائف المعالجة (بمحاولة واحدة)
+# 2. وظائف المعالجة (باستخدام مكتبة openai)
 # ===============================
 def extract_financial_data(file_bytes, file_name, file_type):
-    """يستخلص البيانات بمحاولات متعددة مع آلية التراجع الأُسّي."""
+    """يستخلص البيانات بمحاولات متعددة مع آلية التراجع الأُسّي باستخدام OpenAI Client."""
     if not GEMINI_API_KEY:
         return None
         
-    MAX_RETRIES = 3 # الحد الأقصى للمحاولات
-    INITIAL_WAIT_SECONDS = 5 # وقت الانتظار الأولي
+    MAX_RETRIES = 3 
+    INITIAL_WAIT_SECONDS = 5 
     
+    # التعديل: تحويل مخطط الاستجابة إلى تنسيق وظيفة (Function) لـ OpenAI API
+    extraction_function = {
+        "name": "extract_financial_data_to_json",
+        "description": "استخرج جميع البيانات المالية المحددة من النص أو الصورة إلى كائن JSON.",
+        "parameters": RESPONSE_SCHEMA 
+    }
+    
+    # التعديل: تهيئة العميل قبل حلقة المحاولات
+    try:
+        client = OpenAI(
+            api_key=GEMINI_API_KEY, 
+            base_url=OPENAI_BASE_URL 
+        )
+    except Exception as e:
+        st.error(f"❌ خطأ في تهيئة OpenAI Client: {e}")
+        return None
+        
+    # تحويل محتوى الملف إلى تنسيق base64 و MIME type
+    mime_type = "application/pdf" if file_type=='pdf' else f"image/{'jpeg' if file_type=='jpg' else file_type}"
+    base64_encoded_file = base64.b64encode(file_bytes).decode('utf-8')
+    
+    # التعديل: بناء الـ Content List لنموذج OpenAI: يتضمن النص و الصورة
+    content_parts = [
+        # الجزء النصي: التعليمات العامة للنموذج
+        {
+            "type": "text", 
+            "text": "قم باستخلاص جميع البيانات من الوثيقة المرفقة (PDF أو صورة) وتحويلها إلى كائن JSON باستخدام دالة `extract_financial_data_to_json` حصراً. يجب اتباع التعليمات الموجودة في System Prompt بدقة."
+        },
+        # الجزء الخاص بالصورة/الملف:
+        {
+            "type": "image_url",
+            "image_url": {
+                # استخدام base64 URL data schema
+                "url": f"data:{mime_type};base64,{base64_encoded_file}"
+            }
+        }
+    ]
+
     for attempt in range(MAX_RETRIES):
         try:
-            client = genai.Client(api_key=GEMINI_API_KEY)
-            mime_type = "application/pdf" if file_type=='pdf' else f"image/{'jpeg' if file_type=='jpg' else file_type}"
-            content_parts = [
-                "قم باستخلاص جميع البيانات...",
-                {"inlineData": {"data": base64.b64encode(file_bytes).decode('utf-8'), "mimeType": mime_type}}
-            ]
-            config = {
-                "systemInstruction": SYSTEM_PROMPT,
-                "responseMimeType": "application/json",
-                "responseSchema": RESPONSE_SCHEMA
-            }
             
-            response = client.models.generate_content(model=MODEL_NAME, contents=content_parts, config=config)
+            # التعديل: استخدام client.chat.completions.create مع function_call
+            response = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT}, 
+                    {"role": "user", "content": content_parts} 
+                ],
+                functions=[extraction_function],
+                function_call={"name": "extract_financial_data_to_json"}
+            )
+            
+            # التعديل: استخراج البيانات من function_call
+            function_call = response.choices[0].message.function_call
+            if not function_call or function_call.name != "extract_financial_data_to_json":
+                raise ValueError("لم يقم النموذج بتنفيذ دالة استخلاص البيانات المطلوبة.")
                 
-            extracted_data = json.loads(response.text)
+            json_string = function_call.arguments
+            extracted_data = json.loads(json_string)
             
             extracted_data = pre_process_data_fix_dates(extracted_data) 
             extracted_data['اسم الملف'] = file_name
@@ -187,26 +233,23 @@ def extract_financial_data(file_bytes, file_name, file_type):
             return extracted_data # نجاح، الخروج من الحلقة
 
         except APIError as e:
-            # التحقق من خطأ 503 (الخادم مشغول) أو 429 (تجاوز الحد الأقصى للمعدل)
             error_message = str(e)
-            is_overloaded_error = '503 UNAVAILABLE' in error_message or 'RESOURCE_EXHAUSTED' in error_message
+            # إضافة 'Rate limit reached' لسيناريوهات OpenAI
+            is_overloaded_error = '503 UNAVAILABLE' in error_message or 'RESOURCE_EXHAUSTED' in error_message or 'Rate limit reached' in error_message
             
             if is_overloaded_error and attempt < MAX_RETRIES - 1:
-                # حساب وقت الانتظار (تراجع أُسّي)
                 wait_time = INITIAL_WAIT_SECONDS * (2 ** attempt) 
-                st.warning(f"⚠️ خطأ: الخادم مشغول (503). المحاولة رقم {attempt + 1} فشلت لملف '{file_name}'. سيتم الانتظار {wait_time} ثوانٍ قبل المحاولة مجدداً...")
+                st.warning(f"⚠️ خطأ: الخادم مشغول (503/Rate Limit). المحاولة رقم {attempt + 1} فشلت لملف '{file_name}'. سيتم الانتظار {wait_time} ثوانٍ قبل المحاولة مجدداً...")
                 time.sleep(wait_time)
-                continue # الانتقال للمحاولة التالية
+                continue 
             else:
-                # إذا كان الخطأ دائماً (مثل 403) أو فشلت جميع المحاولات
                 st.error(f"❌ فشلت محاولة الاستخلاص من '{file_name}' بعد {attempt + 1} محاولات: {e}")
                 return None
         
         except Exception as e:
-            # التعامل مع الأخطاء الأخرى غير المتوقعة
             st.error(f"❌ خطأ غير متوقع أثناء الاستخلاص من '{file_name}': {e}")
             return None
-    
+            
     st.error(f"❌ فشلت جميع المحاولات ({MAX_RETRIES}) لاستخلاص البيانات من '{file_name}'.")
     return None
     
