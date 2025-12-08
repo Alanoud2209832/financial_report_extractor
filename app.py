@@ -21,7 +21,7 @@ except ImportError:
 # ===============================
 # 1. إعدادات API
 # ===============================
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyAFguQiXAIA-Ja0jrZobviU_kbg0TQ3Gyk") 
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyBmJnwohN1Vtq9dsRriq51NhyCpOzAdMeI") 
 if not GEMINI_API_KEY:
     st.error("❌ مفتاح GEMINI_API_KEY غير موجود. يرجى إضافته إلى ملف .env.")
     
