@@ -4,7 +4,7 @@ openpyxl==3.1.5
 xlsxwriter==3.2.9
 psycopg2-binary==2.9.11
 python-dotenv==1.2.1
-google-genai==1.47.0
+openai>=1.0.0  
 arabic-reshaper==3.0.0
 python-bidi==0.6.7
 hijri-converter
