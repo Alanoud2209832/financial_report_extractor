@@ -1,0 +1,11 @@
+# .gitignore
+
+# هذا السطر يمنع Git من تتبع ملف .env الخاص بالمتغيرات السرية
+.env
+
+# يمكن إضافة ملفات أخرى لتجاهلها، مثل:
+__pycache__
+*.pyc
+
+# إذا كنت تستخدم بيئة Streamlit Cloud Secrets:
+.streamlit/secrets.toml
