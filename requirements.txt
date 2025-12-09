@@ -9,3 +9,4 @@ arabic-reshaper==3.0.0
 python-bidi==0.6.7
 hijri-converter
 matplotlib
+Pillow
