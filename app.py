@@ -1,4 +1,5 @@
-# app.py
+# app.py 
+
 import streamlit as st
 import pandas as pd
 import json
@@ -8,31 +9,41 @@ import os
 import re
 import pytz
 import time
+import concurrent.futures
 from dotenv import load_dotenv
-from openai import OpenAI
-from sqlite3 import OperationalError
-from db import save_to_db, fetch_all_reports, initialize_db
 
-# تحميل متغيرات البيئة من ملف .env إن وُجد
+# استيراد مكتبات Gemini
+from google import genai
+from google.genai.errors import APIError as GeminiAPIError
+
+# محاولة استيراد الدوال من db.py
+try:
+    from db import save_to_db, fetch_all_reports, initialize_db
+except ImportError:
+    st.error("❌ فشل استيراد db.py. تأكد من وجود الملف وأن الدوال (save_to_db, fetch_all_reports, initialize_db) معرفة فيه.")
+    # تعريف الدوال فارغة لتجنب الانهيار إذا كان الملف مفقودًا
+    def save_to_db(*args): st.error("❌ DB function missing.")
+    def fetch_all_reports(): return None, None
+    def initialize_db(): pass
+
+# ===============================
+# 1. إعدادات API (محدثة لـ Gemini API)
+# ===============================
 load_dotenv()
 
-# ===============================
-# إعدادات OpenAI
-# ===============================
-# هذا هو الكود الذي يجب تعديله إذا كان موجوداً:
-# (يرجح أنه موجود في ملف app.py ضمن قسم إعدادات API)
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
-if not OPENAI_API_KEY:
-    st.error("❌ مفتاح OPENAI_API_KEY غير موجود. أضفه في ملف .env (انظر .env.example).")
+MODEL_NAME = os.getenv("MODEL_NAME", 'gemini-2.5-flash')
 
-# نموذج يمكن تغييره حسب الحاجة (جرب gpt-4o-mini أو gpt-4.1)
-MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  
-
-client = OpenAI(api_key=OPENAI_API_KEY)
+# تهيئة العميل 
+try:
+    client = genai.Client()
+except Exception as e:
+    st.error(f"❌ خطأ في تهيئة Gemini Client: {e}")
+    client = None
 
 # ===============================
-# حقول التقرير (ثابت)
+# 2. حقول التقرير والمخطط (ثابت)
+# ===============================
 # ===============================
 REPORT_FIELDS_ARABIC = [
     "رقم الصادر", "تاريخ الصادر", "اسم المشتبه به", "رقم الهوية",
@@ -44,38 +55,52 @@ REPORT_FIELDS_ARABIC = [
     "رقم الدلالة"
 ]
 
-RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        field: {"type": "string", "description": f"القيمة المستخلصة لـ: {field}"}
-        for field in REPORT_FIELDS_ARABIC
-    }
-}
-
 DELALAT_MAPPING = {
-    1: "تكرار العمليات المالية (إيداعات، حوالات سحوبات مشتريات) في حساب المقيم لا تتناسب مع دخله السنوي.",
+    1: "تكرار العمليات المالية (إيداعات، حوالات سحوبات مشتريات) في حساب المقيم من جهة عمله أو من أفراد أو كيانات تجارية غير مرتبطين بجهة العمل بشكل شبه يومي لا تتناسب مع دخله السنوي (مع مراعاة نمط العمليات المدينة من الحساب).",
     2: "تحويلات أو إيداعات نقدية من حساب عميل مقيم الى حساب فرد سعودي أو كيان تجاري.",
-    3: "حوالات صادرة أو عمليات مالية متنوعة من حساب مقيم أجنبي لعمليات سداد مصروفات تنم عن المتاجرة فيها أو إعادة بيعها.",
+    3: "حوالات صادرة أو عمليات مالية متنوعة من حساب مقيم أجنبي لعمليات سداد مصروفات على سبيل المثال (سداد إيجارات - فواتير - رسوم - غرامات - شراء سلع بمبالغ عالية) تنم عن المتاجرة فيها أو إعادة بيعها.",
     4: "حوالات دولية صادرة من حساب فرد سعودي أو حساب كيان تجاري إلى حسابات أشخاص بشكل متكرر لا تربطهم به غرض أو علاقة عمل.",
     5: "مقيم يقوم بتنفيذ عمليات تحويل مالية خارج المملكة له أو لأشخاص آخرين بمبالغ لا تتناسب مع دخله وقد يكون مصدرها إيداعات نقدية من عدة عملاء مقيمين.",
     6: "حوالات دولية واردة للحساب الشخصي للمقيم أو للبطاقات الائتمانية بمبالغ عالية تنم عن إدارة نشاط تجاري داخل المملكة.",
     7: "شخص مقيم يقوم بتنفيذ عمليات مالية (إيداع شيك أو صرف شيك أو استقبال حواله مالية) وليس لديه حساب بنكي (عميل عابر).",
-    8: "إيداعات نقدية في حساب كيان تجاري بشكل متكرر أو إيداعات مبيعات نقاط بيع، يليها تنفيذ حوالات خارجية أو داخلية لعدة عملاء مقيمين أو عمليات سحب.",
+    8: "إيداعات نقدية في حساب كيان تجاري بشكل متكرر أو إيداعات مبيعات نقاط بيع، يليها تنفيذ حوالات خارجية أو حوالات داخلية لعدة عملاء مقيمين أو عمليات سحب من قبل صاحب الكيان أو المفوض على الحساب سواءً سحب نقدي أو صرف شيكات من المبالغ المودعة (مع الأخذ في الاعتبار طبيعة نشاط الكيان التجاري).",
     9: "حوالات دولية واردة أو صادرة لحساب الكيان التجاري لا تتناسب مع نشاط الكيان التجاري.",
-    10: "تفويض أجنبي على حساب بنكي عائد لكيان تجاري وتمكينه من الحساب بشكل كامل دون وجود مبرر أو غرض واضح.",
+    10: "تفويض أجنبي على حساب بنكي عائد لكيان تجاري وتمكينه من الحساب بشكل كامل وحضوره معه لفرع البنك بشكل دائم وتحرير شيكات له دون وجود مبرر أو غرض واضح.",
     11: "فتح عدة حسابات الفروع كيان تجاري لنفس النشاط دون وجود ارتباط واضح بين هذه الحسابات، نظراً لإدارة الحساب الخاص بالفرع من قبل المقيم."
 }
 
+delalat_list = "\n".join([f"    - {k}: {v}" for k, v in DELALAT_MAPPING.items()])
+
 SYSTEM_PROMPT = (
-    "أنت نظام استخلاص بيانات آلي (OCR/NLP). مهمتك هي قراءة النص والصورة المستخرجة من الوثيقة المالية "
-    "وتحويل البيانات إلى كائن JSON وفقاً للمخطط المحدد بدقة. "
-    "يجب عليك استخلاص جميع التواريخ الهجرية والميلادية وتحويلها إلى صيغة رقمية موحدة 'YYYY/MM/DD'. "
-    "قم بنسخ جميع القيم الأخرى تمامًا كما تظهر في المستند الأصلي، واستخدم 'غير متوفر' للحقول المفقودة. "
-    "بعد الاستخلاص، ضع في حقل 'رقم الدلالة' رقمًا واحدًا من 1 إلى 11 أو 'غير متوفر'."
+    "أنت نظام استخلاص بيانات آلي (Gemini API). مهمتك هي قراءة الوثيقة المرفقة (PDF/صورة) "
+    "واستخلاص جميع البيانات وتحويلها إلى كائن JSON وفقاً للحقول المطلوبة. "
+    "يجب تحويل جميع التواريخ إلى صيغة رقمية موحدة 'YYYY/MM/DD'. "
+    "استخدم 'غير متوفر' للحقول المفقودة. "
+    
+    "**تعليمات تحديد 'رقم الدلالة':** "
+    
+    "بعد استخلاص النص كاملاً في حقل **'سبب الاشتباه'**، قم بتحليل هذا النص مباشرةً "
+    "واختر رقم الدلالة الأنسب من القائمة أدناه. إذا انطبق أكثر من رقم، ضعهما مفصولين بفاصلة فقط (مثال: 1,5).\n\n"
+    
+    "**قائمة الدلالات:**\n"
+    "1: تكرار العمليات المالية (إيداعات، حوالات سحوبات مشتريات) في حساب المقيم لا تتناسب مع دخله السنوي. \n"
+    "2: تحويلات أو إيداعات نقدية من حساب عميل مقيم الى حساب فرد سعودي أو كيان تجاري. \n"
+    "3: حوالات صادرة أو عمليات مالية متنوعة من حساب مقيم أجنبي لعمليات سداد مصروفات تنم عن المتاجرة فيها أو إعادة بيعها. \n"
+    "4: حوالات دولية صادرة من حساب فرد سعودي أو حساب كيان تجاري إلى حسابات أشخاص بشكل متكرر لا تربطهم به غرض أو علاقة عمل. \n"
+    "5: مقيم يقوم بتنفيذ عمليات تحويل مالية خارج المملكة له أو لأشخاص آخرين بمبالغ لا تتناسب مع دخله وقد يكون مصدرها إيداعات نقدية من عدة عملاء مقيمين. \n"
+    "6: حوالات دولية واردة للحساب الشخصي للمقيم أو البطاقات الائتمانية بمبالغ عالية تنم عن إدارة نشاط تجاري داخل المملكة. \n"
+    "7: شخص مقيم يقوم بتنفيذ عمليات مالية (إيداع شيك أو صرف شيك أو استقبال حواله مالية) وليس لديه حساب بنكي (عميل عابر). \n"
+    "8: إيداعات نقدية في حساب كيان تجاري بشكل متكرر أو إيداعات مبيعات نقاط بيع، يليها تنفيذ حوالات خارجية أو داخلية لعدة عملاء مقيمين أو عمليات سحب. \n"
+    "9: حوالات دولية واردة أو صادرة لحساب الكيان التجاري لا تتناسب مع نشاط الكيان التجاري. \n"
+    "10: تفويض أجنبي على حساب بنكي عائد لكيان تجاري وتمكينه من الحساب بشكل كامل دون وجود مبرر أو غرض واضح. \n"
+    "11: فتح عدة حسابات الفروع كيان تجاري لنفس النشاط دون وجود ارتباط واضح بين هذه الحسابات، نظراً لإدارة الحساب الخاص بالفرع من قبل المقيم. \n"
+
+    "يجب أن تكون القيمة المستخلصة في حقل 'رقم الدلالة' هي **الرقم فقط** (مثال: 1 أو 8 أو 8,11). "
+    "أجب فقط بـ JSON نظيف دون أي نص إضافي أو تنسيق Markdown (مثل ```json...```). "
 )
 
 # ===============================
-# دوال مساعدة
+# دوال مساعدة (بدون تغيير)
 # ===============================
 def arabic_to_english_numbers(text):
     if not isinstance(text, str):
@@ -84,23 +109,21 @@ def arabic_to_english_numbers(text):
                   '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9'}
     return text.translate(str.maketrans(arabic_map))
 
-
 def pre_process_data_fix_dates(data):
-    """تفصل تواريخ ملتصقة في حقل 'تاريخ الدارسة من' إن وُجدت"""
     start_key = "تاريخ الدارسة من"
     end_key = "تاريخ الدراسة الى"
     start_date_value = data.get(start_key, "")
-    
-    if start_date_value and isinstance(start_date_value, str):
+    if start_date_value:
         clean_value = re.sub(r'[^\d]', '', start_date_value).strip()
         if len(clean_value) == 16:
-            date1 = clean_value[:8]
-            date2 = clean_value[8:]
-            data[start_key] = f"{date1[:4]}/{date1[4:6]}/{date1[6:]}"
+            date1_clean = clean_value[:8]
+            date2_clean = clean_value[8:]
+            date1_formatted = f"{date1_clean[:4]}/{date1_clean[4:6]}/{date1_clean[6:]}"
+            date2_formatted = f"{date2_clean[:4]}/{date2_clean[4:6]}/{date2_clean[6:]}"
+            data[start_key] = date1_formatted
             if not data.get(end_key) or data.get(end_key).strip() in ['', 'غير متوفر']:
-                data[end_key] = f"{date2[:4]}/{date2[4:6]}/{date2[6:]}"
+                data[end_key] = date2_formatted
     return data
-
 
 def check_for_suspicion(data):
     suspicion_indicator = ""
@@ -110,16 +133,13 @@ def check_for_suspicion(data):
         try:
             date_str_en = arabic_to_english_numbers(str(date_val))
             parts = re.split(r'[/\-.]', date_str_en)
-            if len(parts) == 3:
-                year_str = re.sub(r'[^\d]', '', parts[0])
-                year = int(year_str) if year_str else 0
-                if year > 100 and year < 1400:
-                    suspicion_indicator += f"🔴 ({field}: سنة غير طبيعية) "
+            year_str = parts[0]
+            year = int(year_str) if year_str.isdigit() else 0
+            if year > 100 and year < 1400: 
+                suspicion_indicator += f"🔴 ({field}: سنة غير طبيعية) "
         except Exception:
-            if str(date_val).strip() not in ['غير متوفر', '']:
-                suspicion_indicator += f"🔴 ({field}: صيغة غير مفهومة) "
             pass
-    
+            
     financial_fields = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
     for field in financial_fields:
         val = data.get(field, "")
@@ -127,124 +147,107 @@ def check_for_suspicion(data):
             suspicion_indicator += f"⚠️ ({field} = 0) "
     return suspicion_indicator.strip() or "✅ سليم"
 
-
 # ===============================
-# دالة الاستخلاص عبر OpenAI (مع محاولات RETRY)
+# 3. دالة الاستخلاص عبر Gemini API
 # ===============================
 def extract_financial_data(file_bytes, file_name, file_type):
-    """يستدعي OpenAI ليُرجع JSON مطابق للمخطط. يعيد dict أو None."""
-    if not OPENAI_API_KEY:
+    """يستدعي Gemini API ليُرجع JSON مطابق للمخطط."""
+    if not client:
         return None
 
     MAX_RETRIES = 3
     INITIAL_WAIT_SECONDS = 5
+    
+    # 1. إعداد محتوى الملف 
+    
+    mime_type_map = {
+        'pdf': "application/pdf",
+        'jpg': "image/jpeg",
+        'jpeg': "image/jpeg",
+        'png': "image/png"
+    }
+    mime_type = mime_type_map.get(file_type.lower(), "application/octet-stream")
 
-    mime_type = "application/pdf" if file_type.lower() == 'pdf' else f"image/{file_type.lower()}"
+    try:
+        file_part = genai.types.Part.from_bytes(
+            data=file_bytes,
+            mime_type=mime_type
+        )
+    except Exception as e:
+        
+        return None
 
-    # نضع الملف كـ base64 ضمن النص المرسل للموديل (ملاحظة: قد يكون كبيراً - لكن نحافظ على آلية مشابهة لنسختك)
-    file_b64 = base64.b64encode(file_bytes).decode('utf-8')
-
-    user_prompt = (
-        "قم باستخلاص جميع الحقول التالية إلى JSON مطابق للمخطط، وأجب فقط بالـ JSON دون أي شرح إضافي.\n\n"
-        f"المخطط (العناوين): {', '.join(REPORT_FIELDS_ARABIC)}\n\n"
-        "قواعد:\n"
-        "- جميع حقول التاريخ يجب أن تكون بصيغة YYYY/MM/DD أو 'غير متوفر'.\n"
-        "- إن لم يظهر حقل في المستند ضع 'غير متوفر'.\n"
-        "- حقل 'رقم الدلالة' يجب أن يحتوي رقمًا من 1 إلى 11 أو 'غير متوفر'.\n\n"
-        "الآن الملف المرفق (Base64). لا تذكر Base64 في الناتج، استخدمه فقط للمساعدة على الاستخلاص إن أمكن:\n\n"
-        f"FILE_NAME: {file_name}\nFILE_MIME: {mime_type}\nFILE_BASE64: (مضمَّن)\n"
-    )
+    # بناء قائمة محتوى الرسالة
+    content_parts = [
+        f"{SYSTEM_PROMPT}",
+        file_part
+    ]
 
     for attempt in range(MAX_RETRIES):
         try:
-            response = client.responses.create(
+            # تم حذف سطر st.info الخاص بالإرسال هنا لتسريع المعالجة
+            
+            # 2. استدعاء API 
+            response = client.models.generate_content(
                 model=MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt}
-                ],
-                # نطلب من الموديل إخراج JSON نصي؛ سنقوم بتحليل النص لاحقًا
-                max_tokens=4000,
-                temperature=0.0
+                contents=content_parts,
+                config=genai.types.GenerateContentConfig(
+                    response_mime_type="application/json", 
+                    temperature=0.0
+                )
             )
 
-            # استخراج نص الاستجابة (يتوقف على واجهة SDK؛ هنا نقرأ من response)
-            # الحقل التالي متوافق مع OpenAI Python SDK الحديث: response.output_text أو دمج من response.output
+            # 3. استخراج النص 
+            json_text = response.text
+            
+            # 4. تحليل JSON
             try:
-                output_text = response.output_text  # إن كان متاحًا
-            except Exception:
-                # Fall back: حاول جمع نصوص من response.output إن كانت موجودة
-                output_text = ""
-                if hasattr(response, "output") and isinstance(response.output, list):
-                    for item in response.output:
-                        if isinstance(item, dict) and "content" in item:
-                            # قد يكون content قائمة
-                            cont = item.get("content")
-                            if isinstance(cont, list):
-                                for c in cont:
-                                    if c.get("type") == "output_text":
-                                        output_text += c.get("text", "")
-                            elif isinstance(cont, str):
-                                output_text += cont
-
-            # إذا لم نجد نصًا، حاول استخدام choices (نموذج قديم)
-            if not output_text and hasattr(response, "choices"):
-                try:
-                    output_text = response.choices[0].message["content"]
-                except Exception:
-                    # آخر حل احتياطي
-                    output_text = str(response)
-
-            # الآن نحاول استخراج JSON من النص
-            # بعض الموديلات قد ترجع JSON مضمنًا داخل نص؛ نحاول إيجاد أول قوس معقوف
-            json_text = output_text.strip()
-            # محاولة العثور على بداية JSON
-            start = json_text.find('{')
-            end = json_text.rfind('}')
-            if start != -1 and end != -1 and end > start:
-                json_candidate = json_text[start:end+1]
-            else:
-                json_candidate = json_text
-
-            extracted_data = {}
-            try:
-                extracted_data = json.loads(json_candidate)
+                extracted_data = json.loads(json_text)
             except Exception as e_json:
-                # فشل التحويل => نرجّع None بعد توضيح في سجلات الستريمليت
-                st.error(f"❌ فشل تحويل ناتج الموديل إلى JSON للملف {file_name}: {e_json}")
-                st.info("نص الناتج من الموديل (أول 1000 حرف):")
-                st.code(json_text[:1000])
-                return None
+                # نرفع استثناءً ليلتقطه ThreadPoolExecutor في دالة main
+                raise ValueError(f"فشل تحليل JSON: {e_json} - النص: {json_text[:200]}") 
 
-            # بعد الاستخلاص: التنظيف والإضافات
+            # 5. التنظيف والإضافات
             extracted_data = pre_process_data_fix_dates(extracted_data)
             extracted_data['اسم الملف'] = file_name
+            
             riyadh_tz = pytz.timezone('Asia/Riyadh')
             extracted_data['وقت الاستخلاص'] = pd.Timestamp.now(tz=riyadh_tz).strftime("%Y-%m-%d %H:%M:%S")
             extracted_data['مؤشر التشتت'] = check_for_suspicion(extracted_data)
 
-            # تأكد من وجود كل الحقول الأساسية
+            
             for fld in REPORT_FIELDS_ARABIC:
                 if fld not in extracted_data:
                     extracted_data[fld] = "غير متوفر"
+                    
+            return extracted_data 
 
-            return extracted_data
-
+        except GeminiAPIError as e:
+            error_message = str(e)
+            is_overloaded_error = '429' in error_message or '500' in error_message
+            
+            if is_overloaded_error and attempt < MAX_RETRIES - 1:
+                wait_time = INITIAL_WAIT_SECONDS * (2 ** attempt) 
+                time.sleep(wait_time)
+                continue 
+            else:
+                # نرفع استثناءً ليتم الإبلاغ عنه في دالة main
+                raise RuntimeError(f"خطأ API: {e}")
+                
         except Exception as e:
             is_last = (attempt == MAX_RETRIES - 1)
             wait_time = INITIAL_WAIT_SECONDS * (2 ** attempt)
-            st.warning(f"⚠️ محاولة الاستخلاص رقم {attempt+1} فشلت لملف {file_name}: {e}.")
             if not is_last:
-                st.info(f"إعادة المحاولة بعد {wait_time} ثانية...")
                 time.sleep(wait_time)
                 continue
             else:
-                st.error(f"❌ فشل الاستخلاص من {file_name} بعد {MAX_RETRIES} محاولات.")
-                return None
-
+                # نرفع استثناءً ليتم الإبلاغ عنه في دالة 
+                raise Exception(f"خطأ غير متوقع: {e}")
+                
+    return None
 
 # ===============================
-# وظائف التقرير وواجهة المستخدم
+# وظائف التقرير وواجهة المستخدم (بدون تغيير)
 # ===============================
 def create_final_report_from_db(records, column_names):
     import xlsxwriter
@@ -290,7 +293,7 @@ def display_basic_stats():
 
 
 # ===============================
-# CSS وواجهة Streamlit
+# CSS 
 # ===============================
 st.markdown(
     """
@@ -309,18 +312,18 @@ st.markdown(
 )
 
 # ===============================
-# نقطة البداية للتطبيق
+# نقطة البداية للتطبيق 
 # ===============================
 def main():
     st.set_page_config(layout="wide", page_title="أداة استخلاص وتقارير مالية")
     st.title("📄 نظام استخلاص البيانات")
     st.markdown("---")
 
-    # تهيئة قاعدة البيانات إن لم تكن موجودة
+    # تهيئة قاعدة البيانات
     try:
         initialize_db()
-    except OperationalError:
-        st.error("❌ فشل في تهيئة قاعدة البيانات. تأكد من أذونات الكتابة للمجلد.")
+    except Exception as e:
+        st.error(f"❌ فشل في تهيئة قاعدة البيانات: {e}")
 
     if 'extracted_data_df' not in st.session_state:
         st.session_state['extracted_data_df'] = pd.DataFrame()
@@ -332,32 +335,50 @@ def main():
     )
 
     if uploaded_files:
-        all_extracted_data = []
-
-        if st.button("🚀 بدء الاستخلاص"):
+        
+        if st.button("🚀بدء الاستخلاص"):
             total_files = len(uploaded_files)
             progress_bar = st.progress(0)
             status_text = st.empty()
             processed_count = 0
+            all_extracted_data = []
 
-            status_text.info(f"⏳ بدء استخلاص {total_files} ملفات بالتسلسل. سيأخذ كل ملف الوقت اللازم للاستخلاص...")
-
-            for i, uploaded_file in enumerate(uploaded_files):
+     
+            status_text.info(f"⏳ بدء معالجة  {total_files} .")
+            
+      
+            tasks = []
+            for uploaded_file in uploaded_files:
                 file_bytes, file_name = uploaded_file.read(), uploaded_file.name
                 file_type = file_name.split('.')[-1].lower()
+                tasks.append((file_bytes, file_name, file_type))
 
-                status_text.info(f"⏳ جاري معالجة الملف **{file_name}** ({i+1} من {total_files}).")
-                data = extract_financial_data(file_bytes, file_name, file_type)
-
-                if data:
-                    all_extracted_data.append(data)
-                    st.success(f"✅ تم استخلاص البيانات من **{file_name}** بنجاح.")
-                else:
-                    st.warning(f"⚠️ فشل استخلاص البيانات من **{file_name}**. راجع تفاصيل الخطأ أعلاه.")
-
-                processed_count += 1
-                progress_bar.progress(processed_count / total_files)
-
+      
+            MAX_CONCURRENT_WORKERS = 10 
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT_WORKERS, total_files)) as executor:
+              
+                future_to_file = {
+                    executor.submit(extract_financial_data, bytes, name, type_): name
+                    for bytes, name, type_ in tasks
+                }
+                
+                # التكرار على المستقبلات المكتملة وإضافة النتائج
+                for future in concurrent.futures.as_completed(future_to_file):
+                    file_name = future_to_file[future]
+                    try:
+                        data = future.result()
+                        if data:
+                            all_extracted_data.append(data)
+                            st.success(f"✅ تم استخلاص البيانات من **{file_name}** بنجاح.")
+                        else:
+                            st.warning(f"⚠️ فشل استخلاص البيانات من **{file_name}** بشكل كامل.")
+                    except Exception as exc:
+                        st.error(f"❌ الملف **{file_name}** أثار استثناء أثناء المعالجة: {exc}")
+                    
+                    processed_count += 1
+                    progress_bar.progress(processed_count / total_files)
+            
+            # المعالجة النهائية بعد اكتمال جميع الملفات
             if all_extracted_data:
                 status_text.success(f"✅ اكتمل استخلاص جميع الملفات ({len(all_extracted_data)} ملفات).")
                 new_df = pd.DataFrame(all_extracted_data)
@@ -368,7 +389,6 @@ def main():
                 status_text.error("❌ فشل استخلاص أي بيانات.")
                 progress_bar.empty()
 
-    # جدول قابل للتعديل
     if not st.session_state['extracted_data_df'].empty:
         st.subheader("✏️ جميع البيانات المستخلصة (قابلة للتعديل)")
 
@@ -378,17 +398,21 @@ def main():
                 temp_df.drop(columns=['نص الدلالة المطابقة (للمراجعة)'], inplace=True, errors='ignore')
 
             def get_delala_description(row):
-                delala_num = str(row.get('رقم الدلالة', 'غير متوفر')).strip()
-                try:
-                    num = int(delala_num)
-                    return f"({num}) {DELALAT_MAPPING.get(num, 'رقم الدلالة المستخلصة غير صحيح')}"
-                except ValueError:
-                    return delala_num
+                delala_num_str = str(row.get('رقم الدلالة', 'غير متوفر')).strip()
+                descriptions = []
+                # معالجة الأرقام المتعددة المفصولة بفاصلة
+                for num_item in delala_num_str.split(','):
+                    try:
+                        num = int(num_item.strip())
+                        descriptions.append(f"({num}) {DELALAT_MAPPING.get(num, 'رقم الدلالة المستخلصة غير صحيح')}")
+                    except ValueError:
+                        descriptions.append(f"(غير صحيح) {num_item.strip()}")
+                return "\n\n".join(descriptions)
 
             if 'رقم الدلالة' in temp_df.columns:
                 temp_df.insert(temp_df.columns.get_loc('رقم الدلالة') + 1,
-                               'نص الدلالة المطابقة (للمراجعة)',
-                               temp_df.apply(get_delala_description, axis=1))
+                                'نص الدلالة المطابقة (للمراجعة)',
+                                temp_df.apply(get_delala_description, axis=1))
             st.session_state['extracted_data_df'] = temp_df
             st.rerun()
 
@@ -397,6 +421,7 @@ def main():
             use_container_width=True,
             num_rows="dynamic"
         )
+        
 
         st.markdown("---")
         if st.button("💾 تأكيد وحفظ التعديلات في قاعدة البيانات"):
