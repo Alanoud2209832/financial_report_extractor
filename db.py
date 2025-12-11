@@ -6,20 +6,23 @@ import streamlit as st
 from psycopg2 import sql
 import pandas as pd
 import re
-from itertools import permutations 
-import datetime 
+from itertools import permutations
+import datetime
 
-# محاولة استيراد مكتبة التحويل الهجري
+# ===============================
+# إعدادات وثوابت
+# ===============================
+
 try:
     from hijri_converter import Hijri
 except ImportError:
-    # لا نوقف التنفيذ، فقط نترك تحذير
     Hijri = None
+    st.warning("⚠️ مكتبة 'hijri-converter' غير موجودة. لن يتم دعم تحويل التواريخ الهجرية.")
 
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
 
-# قائمة الأعمدة النهائية في قاعدة البيانات (تم إضافة "رقم الدلالة")
+# قائمة الأعمدة النهائية في قاعدة البيانات
 DB_COLUMN_NAMES = [
     "رقم الصادر", "تاريخ الصادر", "اسم المشتبه به", "رقم الهوية",
     "الجنسية", "تاريخ الميلاد الوافد", "تاريخ الدخول", "الحالة الاجتماعية",
@@ -27,22 +30,26 @@ DB_COLUMN_NAMES = [
     "رقم الوارد", "تاريخ الوارد", "رقم صاحب العمل/ السجل التجاري",
     "سبب الاشتباه", "تاريخ الدارسة من", "تاريخ الدراسة الى",
     "إجمالي إيداع الدراسة",
-    "رقم الدلالة", 
+    "رقم الدلالة", # سيتم التعامل معه كسلسلة نصية (TEXT)
     "اسم الملف",
     "وقت الاستخلاص"
 ]
 
 DATA_KEYS = DB_COLUMN_NAMES
 
-# دالة مساعدة لتحويل الأرقام العربية إلى إنجليزية
+# ===============================
+# دوال الاتصال والتحويل
+# ===============================
+
 def arabic_to_english_numbers(text):
     """تحويل الأرقام العربية إلى إنجليزية لتسهيل المعالجة."""
     if not isinstance(text, str):
-        return text
+        return str(text) 
     
     arabic_map = {
         '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
-        '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9'
+        '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
+        '،': '.' 
     }
     return text.translate(str.maketrans(arabic_map))
 
@@ -51,6 +58,7 @@ def connect_db():
     """ينشئ اتصالًا بقاعدة البيانات."""
     try:
         if not DB_URL:
+            st.error("❌ متغير البيئة 'DATABASE_URL' غير موجود.")
             return None
         conn = psycopg2.connect(DB_URL, sslmode='require')
         return conn
@@ -71,21 +79,19 @@ def _convert_hijri_to_date(parts_tuple):
     except ValueError:
         return None
 
-    # معالجة الأخطاء الشائعة في قراءة السنة الهجرية 
-    if y < 1000 and y >= 400:
-        y += 1000 
-    elif y >= 1 and y <= 99:
-        if y < 60: 
+    if y < 1000:
+        if y < 60: # 14xx
             y += 1400
-        else:
+        else: # 13xx
             y += 1300
     
-    # تحقق من نطاق السنة الهجرية المعقول
-    if y > 1300 and y < 1500:
+    
+    if 1300 < y < 1500:
         if 1 <= m <= 12 and 1 <= d <= 30:
             try:
+                # التحقق من صلاحية التاريخ الهجري قبل التحويل
                 gregorian_date = Hijri(y, m, d).to_gregorian()
-                return gregorian_date 
+                return gregorian_date
             except Exception:
                 return None
                 
@@ -95,94 +101,74 @@ def clean_data_type(key, value):
     """تنظيف وتحويل القيم إلى تنسيقات صالحة لـ PostgreSQL."""
     
     # 1. التعامل مع القيم الفارغة
-    if value is None or value == 'غير متوفر' or value == '' or pd.isna(value):
+    if value is None or str(value).strip() in ['غير متوفر', '', 'nan']:
         return None
 
-    # 2. تحويل الأعمدة الرقمية (NUMERIC/INTEGER)
+    value = arabic_to_english_numbers(str(value))
+
+   
     numeric_fields = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
     
-    if key in numeric_fields or key == "رقم الدلالة":
+    if key in numeric_fields: 
         try:
-            cleaned_value = arabic_to_english_numbers(str(value))
             
-            # منطق رقم الدلالة (يجب أن يكون INTEGER)
-            if key == "رقم الدلالة":
-                num_str = re.sub(r'[^\d]', '', cleaned_value)
-                if not num_str:
-                    return None
-                num = int(num_str)
-                return num if 1 <= num <= 11 else None 
+           
+            temp_val = re.sub(r'[^\d\.-]', '', value.replace(',', ''))
             
-            # منطق الأرقام المالية (المتغير)
-            temp_val = re.sub(r'[^\d\.,-]', '', cleaned_value)
-            last_separator_index = max(temp_val.rfind('.'), temp_val.rfind(','))
-            
-            if last_separator_index != -1:
-                integer_part = temp_val[:last_separator_index]
-                decimal_part = temp_val[last_separator_index+1:]
-                integer_part = re.sub(r'[,\.]', '', integer_part) 
+            if not temp_val:
+                return None
                 
-                if len(decimal_part) > 2:
-                    final_val = integer_part + decimal_part
-                    final_val = re.sub(r'[^\d\.-]', '', final_val)
-                    return float(final_val)
-                else:
-                    final_val = f"{integer_part}.{decimal_part}"
-                    final_val = re.sub(r'[^\d\.-]', '', final_val)
-                    return float(final_val)
-            else:
-                final_val = re.sub(r'[^\d\.-]', '', temp_val)
-                if not final_val:
-                    return None
-                return float(final_val)
+            if temp_val.count('.') > 1:
+                temp_val = temp_val.replace('.', '')
+                
+            return float(temp_val)
 
         except ValueError:
             return None
             
     # 3. تحويل الأعمدة التاريخية (DATE)
     date_fields = ["تاريخ الصادر", "تاريخ الميلاد الوافد", "تاريخ الدخول", "تاريخ الوارد", "تاريخ الدارسة من", "تاريخ الدراسة الى"]
+    
     if key in date_fields:
-        
-        date_str = arabic_to_english_numbers(str(value))
+        date_str = value
         clean_str_base = re.sub(r'[^\d/\-.]', '', date_str).strip()
         
-        # ⚠️ التعديل الرئيسي: حصر التواريخ المتوقع أن تكون هجرية في الصادر والوارد فقط.
-        # هذا يسمح لـ (الدارسة من/الى) بالتحويل الميلادي المباشر أولاً.
-        is_hijri_expected = key in ["تاريخ الصادر", "تاريخ الوارد"] 
+        parts = [p for p in re.split(r'[/\-.]', clean_str_base) if p.strip()] 
+        if len(parts) != 3:
+            return None
 
-        # أ. محاولة تحويل ميلادي مباشر
-        if not is_hijri_expected: 
-            try:
-                # يرجى ملاحظة: قد تحتاج إلى تبديل dayfirst=False إلى dayfirst=True إذا كانت تواريخك تأتي بصيغة يوم/شهر/سنة.
-                date_obj = pd.to_datetime(clean_str_base, errors='coerce', dayfirst=False) 
-                if pd.notna(date_obj) and date_obj.year > 1800:
-                    return date_obj.date()
-            except Exception:
-                pass
         
-        # ب. محاولة التحويل الهجري 
+        try:
+            date_obj = pd.to_datetime(clean_str_base, errors='coerce', dayfirst=True) 
+            if pd.notna(date_obj):
+                if date_obj.year > 1900 and date_obj.year <= datetime.date.today().year:
+                    return date_obj.date()
+        except Exception:
+            pass
+
+        # ب. محاولة التحويل الهجري
         if Hijri:
             try:
-                parts = [p for p in re.split(r'[/\-.]', clean_str_base) if p.strip()] 
-                
-                if len(parts) == 3:
-                    possible_orders = set(permutations(parts))
+                possible_orders = set(permutations(parts))
 
-                    for p in possible_orders:
-                        result = _convert_hijri_to_date(p)
-                        if result:
-                            return result
-                            
-            except Exception as e:
+                for p in possible_orders:
+                    result = _convert_hijri_to_date(p)
+                    if result:
+                     
+                        if result.year > 1900 and result.year <= datetime.date.today().year:
+                             return result
+            except Exception:
                 pass 
-        
-        if clean_str_base and key in date_fields:
-            pass
             
         return None
 
-    # 4. القيم الأخرى (VARCHAR/TEXT)
+    # 4. القيم الأخرى (VARCHAR/TEXT/TIMESTAMP)
     return value
+
+
+# ===============================
+# دوال العمليات على قاعدة البيانات
+# ===============================
 
 
 def save_to_db(extracted_data):
@@ -197,43 +183,54 @@ def save_to_db(extracted_data):
     
     for key in DATA_KEYS:
         value = extracted_data.get(key)
-        
         processed_value = clean_data_type(key, value)
         
-        # لعرض بيانات الحفظ فقط
-        processed_data_for_display[key] = str(processed_value) if isinstance(processed_value, datetime.date) else processed_value
-
+       
         insert_columns.append(sql.Identifier(key))
-        insert_values.append(sql.Literal(processed_value))
+        insert_values.append(processed_value)
 
-    st.info("✅ هذه هي البيانات النهائية التي سيتم حفظها في قاعدة البيانات:")
-    st.json(processed_data_for_display)
+ 
 
     
     try:
         cur = conn.cursor()
         
         columns_sql = sql.SQL(', ').join(insert_columns)
-        values_list = sql.SQL(', ').join(insert_values)
-
+        
         insert_query = sql.SQL("""
             INSERT INTO public.تقارير_الاشتباه ({columns})
             VALUES ({values})
         """).format(
             columns=columns_sql,
-            values=values_list
+            values=sql.SQL(', ').join(sql.Placeholder() * len(insert_values)) 
         )
         
-        cur.execute(insert_query)
+        cur.execute(insert_query, insert_values)
         
         conn.commit()
         cur.close()
         conn.close()
+        
+        # الرسالة المطلوبة بعد الحفظ الناجح
+        st.success("✅ تم حفظ البيانات بنجاح في قاعدة البيانات.") 
         return True
+        
     except Exception as e:
-        # يتم عرض هذا الخطأ في app.py
-        if 'does not exist' in str(e) and 'رقم الدلالة' in str(e):
-             st.error("💡 ملاحظة: إذا ظهر هذا الخطأ، فتأكد أنك أنشأت عمود 'رقم الدلالة' في جدول PostgreSQL الخاص بك بنوع **INTEGER**.")
+        # (باقي منطق معالجة الأخطاء كما هو)
+        error_msg = str(e)
+        if 'column "رقم الدلالة" is of type integer but expression is of type text' in error_msg:
+             st.error("💡 ملاحظة مهمة: عمود **'رقم الدلالة'** في قاعدة البيانات يجب أن يكون بنوع **TEXT** لكي يقبل قيمة مثل '1,11'.")
+             st.error("لحل المشكلة نهائياً، يرجى تشغيل الأمر التالي في PgAdmin أو أداة إدارة قاعدة البيانات الخاصة بك:")
+             st.code("""
+             ALTER TABLE public.تقارير_الاشتباه
+             ALTER COLUMN "رقم الدلالة" TYPE TEXT;
+             """)
+        elif 'column "وقت الاستخلاص" is of type timestamp without time zone but expression is of type text' in error_msg:
+             st.error("💡 ملاحظة: تأكد أن عمود **'وقت الاستخلاص'** في جدول PostgreSQL بنوع **TIMESTAMP**.")
+        elif 'column "رصيد الحساب" is of type numeric but expression is of type text' in error_msg:
+             st.error("💡 ملاحظة: تأكد أن عمود **'رصيد الحساب'** وعمود **'الدخل السنوي'** و **'إجمالي إيداع الدراسة'** في جدول PostgreSQL بنوع **NUMERIC**.")
+        elif 'invalid input syntax for type date' in error_msg:
+             st.error("💡 ملاحظة: فشل تحويل أحد التواريخ إلى صيغة `YYYY-MM-DD`. تأكد من أن الأعمدة التاريخية في PostgreSQL هي بنوع **DATE**.")
         
         st.error(f"❌ فشل الحفظ في قاعدة البيانات: {e}")
         
@@ -251,16 +248,14 @@ def fetch_all_reports():
     try:
         cur = conn.cursor()
         
-        # اختيار جميع الأعمدة المعرفة فقط (تم حذف "id")
+        # اختيار جميع الأعمدة المعرفة فقط
         select_columns = sql.SQL(', ').join([sql.Identifier(col) for col in DB_COLUMN_NAMES])
 
-        # الاستعلام لا يطلب عمود "id" الآن
         select_query = sql.SQL('SELECT {columns} FROM public.تقارير_الاشتباه').format(columns=select_columns)
         
         cur.execute(select_query)
         
-        # أسماء الأعمدة المعادة هي نفسها DB_COLUMN_NAMES
-        column_names = DB_COLUMN_NAMES 
+        column_names = DB_COLUMN_NAMES
         records = cur.fetchall()
         
         cur.close()
@@ -273,3 +268,49 @@ def fetch_all_reports():
         if conn:
             conn.close()
         return None, None
+
+
+def initialize_db():
+    """ينشئ جدول تقارير_الاشتباه إذا لم يكن موجودًا بالفعل. تم تحديث نوع رقم الدلالة إلى TEXT."""
+    conn = connect_db()
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.تقارير_الاشتباه (
+                "رقم الصادر" TEXT,
+                "تاريخ الصادر" DATE,
+                "اسم المشتبه به" TEXT,
+                "رقم الهوية" TEXT,
+                "الجنسية" TEXT,
+                "تاريخ الميلاد الوافد" DATE,
+                "تاريخ الدخول" DATE,
+                "الحالة الاجتماعية" TEXT,
+                "المهنة" TEXT,
+                "رقم الجوال" TEXT,
+                "المدينة" TEXT,
+                "رصيد الحساب" NUMERIC,
+                "الدخل السنوي" NUMERIC,
+                "رقم الوارد" TEXT,
+                "تاريخ الوارد" DATE,
+                "رقم صاحب العمل/ السجل التجاري" TEXT,
+                "سبب الاشتباه" TEXT,
+                "تاريخ الدارسة من" DATE,
+                "تاريخ الدراسة الى" DATE,
+                "إجمالي إيداع الدراسة" NUMERIC,
+                "رقم الدلالة" TEXT,
+                "اسم الملف" TEXT,
+                "وقت الاستخلاص" TIMESTAMP
+            )
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        st.error(f"❌ خطأ أثناء إنشاء الجدول: {e}")
+        return False
