@@ -1,0 +1,19 @@
+# ignore python cache
+__pycache__/
+*.pyc
+
+# Ignore environment variables
+.env
+
+# Ignore Streamlit secret file
+.streamlit/secrets.toml
+
+# Ignore virtual environment
+venv/
+env/
+
+# Ignore OS files
+.DS_Store
+
+db.sqlite  
+*.db     

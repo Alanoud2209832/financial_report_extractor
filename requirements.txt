@@ -1,0 +1,12 @@
+streamlit
+pandas
+openpyxl
+xlsxwriter
+psycopg2-binary
+python-dotenv
+google-genai
+arabic-reshaper
+python-bidi
+hijri-converter
+matplotlib
+Pillow
