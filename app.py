@@ -42,7 +42,7 @@ except Exception as e:
     client = None
 
 # ===============================
-# 2. حقول التقرير والمخطط (ثابت)
+# 2. حقول التقرير والمخطط (تم التعديل لإضافة النص الخام)
 # ===============================
 REPORT_FIELDS_ARABIC = [
     "رقم الصادر", "تاريخ الصادر", "اسم المشتبه به", "رقم الهوية",
@@ -51,7 +51,8 @@ REPORT_FIELDS_ARABIC = [
     "رقم الوارد", "تاريخ الوارد", "رقم صاحب العمل/ السجل التجاري",
     "سبب الاشتباه", "تاريخ الدارسة من", "تاريخ الدراسة الى",
     "إجمالي إيداع الدراسة",
-    "رقم الدلالة"
+    "رقم الدلالة",
+    "النص الخام المستخرج" # <<< حقل جديد للتحقق من قراءة OCR
 ]
 
 DELALAT_MAPPING = {
@@ -75,11 +76,12 @@ D_ENT = {8, 9, 10, 11}    # كيان تجاري - يُمنع للأفراد
 D_IND = {1, 3, 5, 6, 7}     # فرد/مقيم - يُمنع للكيانات
 D_COMMON = {2, 4}           # دلالات مشتركة
 
+# <<< تم تحديث SYSTEM_PROMPT لزيادة المرونة وطلب النص الخام >>>
 SYSTEM_PROMPT = (
     "أنت نظام استخلاص بيانات آلي (Gemini API). مهمتك هي قراءة الوثيقة المرفقة (PDF/صورة) "
     "واستخلاص جميع البيانات وتحويلها إلى كائن JSON وفقاً للحقول المطلوبة. "
     "يجب تحويل جميع التواريخ إلى صيغة رقمية موحدة 'YYYY/MM/DD'. "
-    "استخدم 'غير متوفر' للحقول المفقودة. "
+    "استخدم 'غير متوفر' للحقول المفقودة. كن مرناً في مطابقة الحقول، وابحث عن المصطلحات القريبة أو الشبيهة. "
     
     "**تعليمات تحديد 'رقم الدلالة':** "
     
@@ -98,11 +100,12 @@ SYSTEM_PROMPT = (
     "9: حوالات دولية واردة أو صادرة لحساب الكيان التجاري لا تتناسب مع نشاط الكيان التجاري. \n"
     "10: تفويض أجنبي على حساب بنكي عائد لكيان تجاري وتمكينه من الحساب بشكل كامل دون وجود مبرر أو غرض واضح. \n"
     "11: فتح عدة حسابات الفروع كيان تجاري لنفس النشاط دون وجود ارتباط واضح بين هذه الحسابات، نظراً لإدارة الحساب الخاص بالفرع من قبل المقيم. \n"
-
+    
+    "**المهمة الإضافية:** يجب عليك إرجاع النص الكامل الذي تم استخلاصه من الوثيقة في حقل إضافي يسمى 'النص الخام المستخرج'. هذا الحقل سيساعدنا في التحقق من مشكلة قراءة الملفات (OCR). " # <<< التوجيه الجديد
+    
     "يجب أن تكون القيمة المستخلصة في حقل 'رقم الدلالة' هي **الرقم فقط** (مثال: 1 أو 8 أو 8,11). "
     "أجب فقط بـ JSON نظيف دون أي نص إضافي أو تنسيق Markdown (مثل ```json...```). "
 )
-
 # ===============================
 # دوال مساعدة
 # ===============================
@@ -175,7 +178,13 @@ def apply_strict_rules(extracted_data):
     deposits = clean_number(extracted_data.get("إجمالي إيداع الدراسة", 0))
     suspicion_text = extracted_data.get("سبب الاشتباه", "").upper()
     
-    is_entity = sijil_tijari not in ["غير متوفر", "غير_متوفر", None, ""]
+    # محاولة التحقق من الكيان بناءً على النص الخام إذا لم يكن السجل متوفراً
+    raw_text = extracted_data.get("النص الخام المستخرج", "").upper()
+    is_entity_keywords = ["سجل تجاري", "كيان تجاري", "تموينات", "مؤسسة", "مكتب"]
+    is_entity_from_text = any(keyword in raw_text for keyword in is_entity_keywords)
+    
+    is_entity = (sijil_tijari not in ["غير متوفر", "غير_متوفر", None, ""]) or is_entity_from_text
+    
     final_indicators = set()
 
     # ****************************************************
@@ -230,6 +239,11 @@ def apply_strict_rules(extracted_data):
     # 5. الإلزام 11 (فتح عدة حسابات/ فروع)
     if is_entity and any(keyword in suspicion_text for keyword in ["فتح عدة حسابات الفروع", "إدارة الحساب الخاص بالفرع من قبل المقيم"]):
         final_indicators.add(11)
+        
+    # 6. الإلزام 8 (إيداعات كيان غير متناسبة) - تم الإبقاء عليه مرناً نسبياً
+    if is_entity and deposits > 1000000 and any(keyword in suspicion_text for keyword in ["حوالات واردة داخلية", "مبيعات نقاط بيع", "سحب آلي"]):
+        final_indicators.add(8)
+
 
     # ----------------------------------------------------
     # د. التنسيق النهائي للمُخرَج
@@ -301,7 +315,7 @@ def extract_financial_data(file_bytes, file_name, file_type):
             extracted_data = pre_process_data_fix_dates(extracted_data)
             extracted_data['اسم الملف'] = file_name
             
-            # >>>>>> الإضافة الجديدة (تطبيق المنطق القسري هنا) <<<<<<
+            # >>>>>> تطبيق المنطق القسري هنا <<<<<<
             
             # 1. تطبيق قواعد المنع والإلزام بواسطة الكود البرمجي (بناءً على البيانات المستخلصة)
             final_delalat = apply_strict_rules(extracted_data) 
@@ -367,7 +381,7 @@ def create_final_report_from_db(records, column_names):
     col_format = workbook.add_format({'text_wrap': True, 'align': 'right', 'valign': 'top'})
 
     for i, col_name in enumerate(df.columns):
-        if col_name in ['سبب الاشتباه']:
+        if col_name in ['سبب الاشتباه', 'النص الخام المستخرج']: # <<< إضافة الحقل الجديد ليكون واسعاً في Excel
             worksheet.set_column(i, i, 120, col_format)
         else:
             width = 25 if col_name in ["اسم المشتبه به", "رقم صاحب العمل/ السجل التجاري", "اسم الملف", "وقت الاستخلاص"] else 18
@@ -481,7 +495,9 @@ def main():
             if all_extracted_data:
                 status_text.success(f"✅ اكتمل استخلاص جميع الملفات ({len(all_extracted_data)} ملفات).")
                 new_df = pd.DataFrame(all_extracted_data)
-                display_cols = ["مؤشر التشتت", "اسم الملف", "وقت الاستخلاص"] + REPORT_FIELDS_ARABIC
+                
+                # ترتيب الأعمدة للعرض مع وضع النص الخام في النهاية
+                display_cols = ["مؤشر التشتت", "اسم الملف", "وقت الاستخلاص"] + [f for f in REPORT_FIELDS_ARABIC if f != "النص الخام المستخرج"] + ["النص الخام المستخرج"]
                 new_df = new_df.reindex(columns=display_cols, fill_value='غير متوفر')
                 st.session_state['extracted_data_df'] = pd.concat([st.session_state['extracted_data_df'], new_df], ignore_index=True)
             else:
@@ -527,11 +543,16 @@ def main():
             saved_count = 0
             total_rows = len(edited_df)
             status_placeholder = st.empty()
+            
+            # الأعمدة التي يجب حذفها قبل الحفظ في قاعدة البيانات
+            cols_to_drop = ['مؤشر التشتت', 'نص الدلالة المطابقة (للمراجعة)', 'النص الخام المستخرج'] 
+            
             for index, row in edited_df.iterrows():
                 row_data = dict(row)
-                # حذف أعمدة مؤقتة
-                row_data.pop('مؤشر التشتت', None)
-                row_data.pop('نص الدلالة المطابقة (للمراجعة)', None)
+                # حذف الأعمدة المؤقتة قبل الحفظ
+                for col in cols_to_drop:
+                    row_data.pop(col, None)
+                    
                 if save_to_db(row_data):
                     saved_count += 1
                 else:
