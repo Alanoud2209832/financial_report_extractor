@@ -34,7 +34,7 @@ usernames = ["Alanoud", "guest"]
 
 # كلمات المرور المشفرة (hashed passwords) لكلمات المرور: "Alanoud123" و "Guestpass"
 # يتم استخدام Hasher مرة واحدة لتشفير كلمات المرور
-hashed_passwords = stauth.Hasher(['Alanoud123', 'Guestpass']).generate()
+hashed_passwords = stauth.Hasher(passwords=['Alanoud123', 'Guestpass']).generate()
 
 authenticator = stauth.Authenticate(
     names,
