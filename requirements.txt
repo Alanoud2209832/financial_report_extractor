@@ -10,3 +10,4 @@ python-bidi
 hijri-converter
 matplotlib
 Pillow
+streamlit-authenticator
