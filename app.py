@@ -1,4 +1,4 @@
-# app.py 
+# app.py (النسخة النهائية المعدلة للعمل مع Gemini 2.5 Flash API)
 
 import streamlit as st
 import pandas as pd
@@ -9,7 +9,7 @@ import os
 import re
 import pytz
 import time
-import concurrent.futures
+import concurrent.futures 
 from dotenv import load_dotenv
 
 # استيراد مكتبات Gemini
@@ -27,10 +27,9 @@ except ImportError:
     def initialize_db(): pass
 
 # ===============================
-# 1. إعدادات API (محدثة لـ Gemini API)
+# 1. إعدادات API 
 # ===============================
 load_dotenv()
-
 
 MODEL_NAME = os.getenv("MODEL_NAME", 'gemini-2.5-flash')
 
@@ -68,24 +67,25 @@ DELALAT_MAPPING = {
     11: "فتح عدة حسابات الفروع كيان تجاري لنفس النشاط دون وجود ارتباط واضح بين هذه الحسابات، نظراً لإدارة الحساب الخاص بالفرع من قبل المقيم."
 }
 
-# Constants for the strict rules engine (Added for 'مهمة الدلالات')
-D_ENT = {8, 9, 10, 11}    # كيان تجاري - يُمنع للأفراد
-D_IND = {1, 3, 5, 6, 7}     # فرد/مقيم - يُمنع للكيانات
-D_COMMON = {2, 4}           # دلالات مشتركة
-
-
 delalat_list = "\n".join([f"    - {k}: {v}" for k, v in DELALAT_MAPPING.items()])
 
+# =================================================================================
+# التعديل الرئيسي: تحسين تعليمات SYSTEM_PROMPT لتحديد رقم الدلالة بدقة عالية
+# =================================================================================
 SYSTEM_PROMPT = (
     "أنت نظام استخلاص بيانات آلي (Gemini API). مهمتك هي قراءة الوثيقة المرفقة (PDF/صورة) "
     "واستخلاص جميع البيانات وتحويلها إلى كائن JSON وفقاً للحقول المطلوبة. "
     "يجب تحويل جميع التواريخ إلى صيغة رقمية موحدة 'YYYY/MM/DD'. "
     "استخدم 'غير متوفر' للحقول المفقودة. "
     
-    "**تعليمات تحديد 'رقم الدلالة':** "
+    "**تعليمات تحديد 'رقم الدلالة' (مهمة عالية الدقة):** "
     
-    "بعد استخلاص النص كاملاً في حقل **'سبب الاشتباه'**، قم بتحليل هذا النص مباشرةً "
-    "واختر رقم الدلالة الأنسب من القائمة أدناه. إذا انطبق أكثر من رقم، ضعهما مفصولين بفاصلة فقط (مثال: 1,5).\n\n"
+    "1. **اقرأ حقل 'سبب الاشتباه'** كاملاً. "
+    "2. **حدد طبيعة المشتبه به:** هل هو **فرد/وافد** (بمجرد ذكر 'الوافد' أو 'الإقامة') أو **كيان تجاري** (بمجرد ذكر 'سجل تجاري' أو 'مؤسسة' أو 'تموينات'). "
+    "3. **استخدم قائمة الدلالات أدناه، وطبّق قواعد المنع القسرية التالية:** "
+    "   - **إذا كان المشتبه به 'فرد/وافد'،** **يُمنع** اختيار الدلالات (8، 9، 10، 11) لأنها خاصة بالكيانات. اختر فقط من (1، 2، 3، 4، 5، 6، 7). "
+    "   - **إذا كان المشتبه به 'كيان تجاري'،** **يُمنع** اختيار الدلالات (1، 3، 5، 6، 7) لأنها خاصة بالأفراد. اختر فقط من (2، 4، 8، 9، 10، 11). "
+    "4. **اختر رقم الدلالة الأنسب** الذي يعكس محتوى 'سبب الاشتباه'. إذا انطبق أكثر من رقم، ضعهما مفصولين بفاصلة فقط (مثال: 8,11). يجب أن تكون القيمة المستخلصة هي **الرقم فقط** (مثال: 1 أو 8 أو 8,11). "
     
     "**قائمة الدلالات:**\n"
     "1: تكرار العمليات المالية (إيداعات، حوالات سحوبات مشتريات) في حساب المقيم لا تتناسب مع دخله السنوي. \n"
@@ -100,12 +100,14 @@ SYSTEM_PROMPT = (
     "10: تفويض أجنبي على حساب بنكي عائد لكيان تجاري وتمكينه من الحساب بشكل كامل دون وجود مبرر أو غرض واضح. \n"
     "11: فتح عدة حسابات الفروع كيان تجاري لنفس النشاط دون وجود ارتباط واضح بين هذه الحسابات، نظراً لإدارة الحساب الخاص بالفرع من قبل المقيم. \n"
 
-    "يجب أن تكون القيمة المستخلصة في حقل 'رقم الدلالة' هي **الرقم فقط** (مثال: 1 أو 8 أو 8,11). "
     "أجب فقط بـ JSON نظيف دون أي نص إضافي أو تنسيق Markdown (مثل ```json...```). "
 )
+# =================================================================================
+# نهاية التعديل الرئيسي
+# =================================================================================
 
 # ===============================
-# دوال مساعدة (بدون تغيير)
+# دوال مساعدة 
 # ===============================
 def arabic_to_english_numbers(text):
     if not isinstance(text, str):
@@ -140,7 +142,7 @@ def check_for_suspicion(data):
             parts = re.split(r'[/\-.]', date_str_en)
             year_str = parts[0]
             year = int(year_str) if year_str.isdigit() else 0
-            if year > 100 and year < 1400: 
+            if year > 100 and year < 1400: # افتراض أن التواريخ الهجرية هي 1300-1500
                 suspicion_indicator += f"🔴 ({field}: سنة غير طبيعية) "
         except Exception:
             pass
@@ -151,91 +153,6 @@ def check_for_suspicion(data):
         if str(val).strip() in ['0', '0.00', '٠', '٠,٠٠']:
             suspicion_indicator += f"⚠️ ({field} = 0) "
     return suspicion_indicator.strip() or "✅ سليم"
-
-# ----------------------------------------------------
-# 3. دالة تطبيق المنطق القسري (مهمة الدلالات) - NEW FUNCTION
-# ----------------------------------------------------
-
-def apply_strict_rules(extracted_data):
-    """
-    تطبق قواعد المنع والإلزام القسري (المنطق الحسابي الثابت) على البيانات المستخلصة 
-    لتحديد 'رقم الدلالة' بدقة 100%.
-    """
-    
-    # Helper to clean financial numbers
-    def clean_number(value):
-        value = arabic_to_english_numbers(str(value).replace(',', '').replace('.', ''))
-        match = re.search(r'(\d+)', value)
-        try:
-            # Use a safe conversion: if regex fails, assume 0.0
-            return float(match.group(0))
-        except (AttributeError, ValueError):
-            return 0.0
-
-    # Get required fields
-    sijil_tijari = extracted_data.get("رقم صاحب العمل/ السجل التجاري", "")
-    deposits = clean_number(extracted_data.get("إجمالي إيداع الدراسة", 0))
-    # Convert suspicion text to uppercase once for efficient keyword search
-    suspicion_text = extracted_data.get("سبب الاشتباه", "").upper()
-    
-    # Determine Entity Status
-    is_entity_keywords = ["سجل تجاري", "كيان تجاري", "تموينات", "مؤسسة", "مكتب"]
-    is_entity_from_text = any(keyword.upper() in suspicion_text for keyword in is_entity_keywords)
-    # Check if sijil_tijari is present and not an "unavailable" string
-    sijil_present = sijil_tijari not in ["غير متوفر", "غير_متوفر", None, ""]
-    is_entity = sijil_present or is_entity_from_text
-    
-    final_indicators = set()
-    
-    # 1. Start with indicators suggested by Gemini (if any)
-    delala_from_gemini = extracted_data.get("رقم الدلالة", "غير متوفر")
-    for num_str in str(delala_from_gemini).split(','):
-        try:
-            num = int(num_str.strip())
-            if 1 <= num <= 11:
-                final_indicators.add(num)
-        except ValueError:
-            pass 
-
-    # 2. Apply Rule A: Categorical Prohibition 
-    if is_entity:
-        # If it's an entity, remove all individual indicators
-        final_indicators -= D_IND
-    else:
-        # If it's an individual, remove all entity indicators
-        final_indicators -= D_ENT
-        
-    # 3. Apply Rule B: Mandatory Calculation/Keyword Check 
-    
-    # Define mandatory keywords (in Arabic, matching the extracted text's potential case)
-    keywords_8 = ["حوالات واردة داخلية", "نقاط بيع", "سحب آلي", "عدم وجود تناسب"]
-    keywords_10 = ["شخص آخر مرافق له", "ليس له توقيع", "تفويض أجنبي"]
-    keywords_11 = ["فتح عدة حسابات", "يزور الفرع باستمرار", "يطلب فتح حسابات"]
-    keywords_9 = ["حوالات دولية", "خارج المملكة"] 
-
-    
-    if is_entity:
-        # Obligation 8 (Disproportionate entity deposits)
-        # Threshold: > 1,000,000 SAR and specific disproportionate operation types
-        if deposits > 1000000 and any(keyword.upper() in suspicion_text for keyword in keywords_8):
-            final_indicators.add(8)
-            
-        # Obligation 10 (Foreign delegation/empowerment on an entity account)
-        if any(keyword.upper() in suspicion_text for keyword in keywords_10):
-            final_indicators.add(10)
-            
-        # Obligation 11 (Opening multiple accounts/branches)
-        if any(keyword.upper() in suspicion_text for keyword in keywords_11):
-            final_indicators.add(11)
-
-        # Obligation 9 (Disproportionate international transfers for an entity)
-        if any(keyword.upper() in suspicion_text for keyword in keywords_9):
-             final_indicators.add(9)
-
-
-    # Convert the set back to a sorted, comma-separated string
-    return ",".join(map(str, sorted(list(final_indicators))))
-
 
 # ===============================
 # 4. دالة الاستخلاص عبر Gemini API
@@ -248,8 +165,9 @@ def extract_financial_data(file_bytes, file_name, file_type):
     MAX_RETRIES = 3
     INITIAL_WAIT_SECONDS = 5
     
-    # 1. إعداد محتوى الملف 
+    # 1. إعداد محتوى الملف (Gemini API يستخدم genai.types.Part)
     
+    # تحديد نوع MIME الصحيح للملف
     mime_type_map = {
         'pdf': "application/pdf",
         'jpg': "image/jpeg",
@@ -258,13 +176,14 @@ def extract_financial_data(file_bytes, file_name, file_type):
     }
     mime_type = mime_type_map.get(file_type.lower(), "application/octet-stream")
 
+    # إنشاء كائن الجزء (Part) من البايتات ونوع MIME
     try:
         file_part = genai.types.Part.from_bytes(
             data=file_bytes,
             mime_type=mime_type
         )
     except Exception as e:
-        
+        # لا نستخدم st.error داخل دالة التنفيذ المتوازي، بل نرجع None ليتم تسجيل الخطأ في main
         return None
 
     # بناء قائمة محتوى الرسالة
@@ -287,7 +206,7 @@ def extract_financial_data(file_bytes, file_name, file_type):
                 )
             )
 
-            # 3. استخراج النص 
+            # 3. استخراج النص (نتوقع JSON نظيف)
             json_text = response.text
             
             # 4. تحليل JSON
@@ -299,19 +218,13 @@ def extract_financial_data(file_bytes, file_name, file_type):
 
             # 5. التنظيف والإضافات
             extracted_data = pre_process_data_fix_dates(extracted_data)
-            
-            # >>>>>> الإضافة الجديدة: تطبيق المنطق القسري للدلالات <<<<<<
-            final_delalat = apply_strict_rules(extracted_data) 
-            extracted_data['رقم الدلالة'] = final_delalat
-            # >>>>>> نهاية الإضافة الجديدة <<<<<<
-            
             extracted_data['اسم الملف'] = file_name
             
             riyadh_tz = pytz.timezone('Asia/Riyadh')
             extracted_data['وقت الاستخلاص'] = pd.Timestamp.now(tz=riyadh_tz).strftime("%Y-%m-%d %H:%M:%S")
             extracted_data['مؤشر التشتت'] = check_for_suspicion(extracted_data)
 
-            
+            # 6. تأكد من وجود كل الحقول الأساسية
             for fld in REPORT_FIELDS_ARABIC:
                 if fld not in extracted_data:
                     extracted_data[fld] = "غير متوفر"
@@ -337,7 +250,7 @@ def extract_financial_data(file_bytes, file_name, file_type):
                 time.sleep(wait_time)
                 continue
             else:
-                # نرفع استثناءً ليتم الإبلاغ عنه في دالة 
+                # نرفع استثناءً ليتم الإبلاغ عنه في دالة main
                 raise Exception(f"خطأ غير متوقع: {e}")
                 
     return None
@@ -389,7 +302,7 @@ def display_basic_stats():
 
 
 # ===============================
-# CSS 
+# CSS وواجهة Streamlit (بدون تغيير)
 # ===============================
 st.markdown(
     """
@@ -439,19 +352,20 @@ def main():
             processed_count = 0
             all_extracted_data = []
 
-      
+            # رسالة بداية واضحة ومطمئنة للمستخدم
             status_text.info(f"⏳ بدء معالجة  {total_files} .")
             
+            # تهيئة المهام للمعالج المتوازي (يجب قراءة البايتات هنا)
             tasks = []
             for uploaded_file in uploaded_files:
                 file_bytes, file_name = uploaded_file.read(), uploaded_file.name
                 file_type = file_name.split('.')[-1].lower()
                 tasks.append((file_bytes, file_name, file_type))
 
-      
+            # استخدام ThreadPoolExecutor لتنفيذ 10 مهام API بالتوازي
             MAX_CONCURRENT_WORKERS = 10 
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT_WORKERS, total_files)) as executor:
-              
+                # إرسال جميع المهام وتعيين المستقبلات (Futures) إلى أسماء الملفات لتتبع أفضل
                 future_to_file = {
                     executor.submit(extract_financial_data, bytes, name, type_): name
                     for bytes, name, type_ in tasks
@@ -468,6 +382,7 @@ def main():
                         else:
                             st.warning(f"⚠️ فشل استخلاص البيانات من **{file_name}** بشكل كامل.")
                     except Exception as exc:
+                        # التقاط أي استثناءات مرفوعة داخل extract_financial_data
                         st.error(f"❌ الملف **{file_name}** أثار استثناء أثناء المعالجة: {exc}")
                     
                     processed_count += 1
@@ -484,6 +399,7 @@ def main():
                 status_text.error("❌ فشل استخلاص أي بيانات.")
                 progress_bar.empty()
 
+    # جدول قابل للتعديل
     if not st.session_state['extracted_data_df'].empty:
         st.subheader("✏️ جميع البيانات المستخلصة (قابلة للتعديل)")
 
@@ -506,8 +422,8 @@ def main():
 
             if 'رقم الدلالة' in temp_df.columns:
                 temp_df.insert(temp_df.columns.get_loc('رقم الدلالة') + 1,
-                                'نص الدلالة المطابقة (للمراجعة)',
-                                temp_df.apply(get_delala_description, axis=1))
+                                 'نص الدلالة المطابقة (للمراجعة)',
+                                 temp_df.apply(get_delala_description, axis=1))
             st.session_state['extracted_data_df'] = temp_df
             st.rerun()
 
