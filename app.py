@@ -1,7 +1,6 @@
-# app.py (النسخة النهائية المعدلة لتحسين موثوقية استخلاص JSON)
+# app.py (النسخة النهائية مع المصادقة المخصصة)
 import streamlit as st
 import streamlit_authenticator as stauth
-import streamlit as st
 import pandas as pd
 import json
 import io
@@ -27,11 +26,14 @@ except ImportError:
     def fetch_all_reports(): return None, None
     def initialize_db(): pass
 
+# ===============================
+# 1. إعداد المصادقة المخصصة (Authentication)
+# ===============================
 names = ["Alanoud Sultan", "Financial Guest"]
 usernames = ["Alanoud", "guest"]
 
 # كلمات المرور المشفرة (hashed passwords) لكلمات المرور: "Alanoud123" و "Guestpass"
-# يجب أن تكون كلمات المرور مشفرة لأمان أفضل.
+# يتم استخدام Hasher مرة واحدة لتشفير كلمات المرور
 hashed_passwords = stauth.Hasher(['Alanoud123', 'Guestpass']).generate()
 
 authenticator = stauth.Authenticate(
@@ -41,8 +43,9 @@ authenticator = stauth.Authenticate(
     'app_cookie_name',  # اسم الكوكيز
     'random_signature_key', # مفتاح سري لتوقيع الجلسة
     cookie_expiry_days=30
-    )
-    # ------------------ LOGIN WIDGET ----------------------------
+)
+
+# ------------------ LOGIN WIDGET ----------------------------
 # عرض نموذج تسجيل الدخول
 name, authentication_status, username = authenticator.login('Login', 'main')
 
@@ -66,15 +69,12 @@ if authentication_status:
     # رسالة ترحيب في الشريط الجانبي
     st.sidebar.title(f"Welcome {name}")
     
-    # ------------------ هنا يجب أن يبدأ كل كود تطبيقك الأساسي ------------------
-    # (أي كل كود معالجة ملفات PDF، وظيفة رفع الملفات، st.title الخاص بالتطبيق)
+    # استدعاء دالة التطبيق الرئيسية
+    main()
 
-    # مثال: (استبدليه بالكود الحالي لتطبيقك)
-    st.title("Financial Report Extractor") 
-    # ... بقية كود التطبيق لديكِ (الذي يعالج ملفات PDF)...
-# ===============================
-# 1. إعدادات API 
-# ===============================
+# =================================================================
+# 2. إعدادات API والثوابت (تبقى خارج المصادقة لتكون متاحة للدوال)
+# =================================================================
 load_dotenv()
 
 MODEL_NAME = os.getenv("MODEL_NAME", 'gemini-2.5-flash') 
@@ -83,12 +83,10 @@ MODEL_NAME = os.getenv("MODEL_NAME", 'gemini-2.5-flash')
 try:
     client = genai.Client()
 except Exception as e:
-    st.error(f"❌ خطأ في تهيئة Gemini Client: {e}")
+    # لن نستخدم st.error هنا لأننا خارج دالة main (سنتعامل مع الخطأ لاحقاً)
     client = None
 
-# ===============================
-# 2. حقول التقرير والمخطط (ثابت)
-# ===============================
+# حقول التقرير والمخطط (ثابت)
 REPORT_FIELDS_ARABIC = [
     "رقم الصادر", "تاريخ الصادر", "اسم المشتبه به", "رقم الهوية",
     "الجنسية", "تاريخ الميلاد الوافد", "تاريخ الدخول", "الحالة الاجتماعية",
@@ -113,9 +111,7 @@ DELALAT_MAPPING = {
     11: "فتح عدة حسابات الفروع كيان تجاري لنفس النشاط دون وجود ارتباط واضح بين هذه الحسابات، نظراً لإدارة الحساب الخاص بالفرع من قبل المقيم."
 }
 
-# =================================================================================
-# التعديل الرئيسي: إضافة مخطط JSON صريح وتخفيف قيود API
-# =================================================================================
+# تعليمات النظام لنموذج Gemini (مهمة للاستخلاص)
 SYSTEM_PROMPT = (
     "أنت نظام استخلاص بيانات آلي (Gemini API) فائق الدقة. مهمتك هي قراءة الوثيقة المرفقة (PDF/صورة) "
     "واستخلاص جميع البيانات وتحويلها إلى كائن JSON وفقاً للحقول المطلوبة أدناه، **ويجب إخراج قيمة لكل حقل.** "
@@ -162,9 +158,6 @@ SYSTEM_PROMPT = (
     "}\n"
     "```"
 )
-# =================================================================================
-# نهاية تعليمات النظام
-# =================================================================================
 
 # ===============================
 # دوال مساعدة
@@ -227,12 +220,13 @@ def check_for_suspicion(data):
 def extract_financial_data(file_bytes, file_name, file_type):
     """يستدعي Gemini API ليُرجع JSON مطابق للمخطط."""
     if not client:
-        return None
-
+        # إذا فشلت التهيئة، أرجع خطأ واضح
+        raise Exception("❌ فشل تهيئة Gemini Client. تحقق من مفتاح API.")
+        
+    # بقية كود extract_financial_data كما هو:
     MAX_RETRIES = 3
     INITIAL_WAIT_SECONDS = 5
     
-    # تحديد نوع MIME الصحيح للملف
     mime_type_map = {
         'pdf': "application/pdf",
         'jpg': "image/jpeg",
@@ -241,16 +235,14 @@ def extract_financial_data(file_bytes, file_name, file_type):
     }
     mime_type = mime_type_map.get(file_type.lower(), "application/octet-stream")
 
-    # إنشاء كائن الجزء (Part) من البايتات ونوع MIME
     try:
         file_part = genai.types.Part.from_bytes(
             data=file_bytes,
             mime_type=mime_type
         )
     except Exception as e:
-        return None
+        raise Exception(f"خطأ في إنشاء ملف الجزء لـ Gemini: {e}")
 
-    # بناء قائمة محتوى الرسالة
     content_parts = [
         f"{SYSTEM_PROMPT}",
         file_part
@@ -262,33 +254,23 @@ def extract_financial_data(file_bytes, file_name, file_type):
             response = client.models.generate_content(
                 model=MODEL_NAME,
                 contents=content_parts,
-                # إزالة response_mime_type="application/json" لزيادة المرونة
                 config=genai.types.GenerateContentConfig(
                    temperature=0.0
                 )
             )
 
-            # 3. استخراج النص (نبحث عن كتلة JSON)
+            # 3. استخراج النص وتنظيفه
             json_text_raw = response.text
-            
-            # 4. تنظيف النص واستخراج كتلة JSON باستخدام regex
-            # نبحث عن أي كتلة تبدأ بـ { وتنتهي بـ } داخل أو بدون ```json
             match = re.search(r'```json\s*(\{[\s\S]*?\})\s*```', json_text_raw, re.DOTALL)
-            if match:
-                json_text = match.group(1)
-            else:
-                # إذا لم يتم العثور على كتلة JSON مع ```json، نحاول تحليل النص بالكامل كـ JSON
-                json_text = json_text_raw
+            json_text = match.group(1) if match else json_text_raw
 
-            # 5. تحليل JSON
+            # 4. تحليل JSON
             try:
-                # محاولة تحميل JSON
                 extracted_data = json.loads(json_text)
             except Exception as e_json:
-                # نرفع استثناءً ليلتقطه ThreadPoolExecutor في دالة main
                 raise ValueError(f"فشل تحليل JSON: {e_json} - النص: {json_text[:200]}") 
 
-            # 6. التنظيف والإضافات
+            # 5. التنظيف والإضافات
             extracted_data = pre_process_data_fix_dates(extracted_data)
             extracted_data['اسم الملف'] = file_name
             
@@ -296,7 +278,7 @@ def extract_financial_data(file_bytes, file_name, file_type):
             extracted_data['وقت الاستخلاص'] = pd.Timestamp.now(tz=riyadh_tz).strftime("%Y-%m-%d %H:%M:%S")
             extracted_data['مؤشر التشتت'] = check_for_suspicion(extracted_data)
 
-            # 7. تأكد من وجود كل الحقول الأساسية
+            # 6. تأكد من وجود كل الحقول الأساسية
             for fld in REPORT_FIELDS_ARABIC:
                 if fld not in extracted_data:
                     extracted_data[fld] = "غير متوفر"
@@ -304,6 +286,7 @@ def extract_financial_data(file_bytes, file_name, file_type):
             return extracted_data 
 
         except GeminiAPIError as e:
+            # معالجة أخطاء API وإعادة المحاولة
             error_message = str(e)
             is_overloaded_error = '429' in error_message or '500' in error_message
             
@@ -312,23 +295,22 @@ def extract_financial_data(file_bytes, file_name, file_type):
                 time.sleep(wait_time)
                 continue 
             else:
-                # نرفع استثناءً ليتم الإبلاغ عنه في دالة main
                 raise RuntimeError(f"خطأ API: {e}")
                 
         except Exception as e:
+            # معالجة الأخطاء العامة
             is_last = (attempt == MAX_RETRIES - 1)
             wait_time = INITIAL_WAIT_SECONDS * (2 ** attempt)
             if not is_last:
                 time.sleep(wait_time)
                 continue
             else:
-                # نرفع استثناءً ليتم الإبلاغ عنه في دالة main
                 raise Exception(f"خطأ غير متوقع: {e}")
                 
     return None
 
 # ===============================
-# وظائف التقرير وواجهة المستخدم (بدون تغيير)
+# وظائف التقرير وواجهة المستخدم
 # ===============================
 def create_final_report_from_db(records, column_names):
     """إنشاء ملف Excel قابل للتحميل من بيانات قاعدة البيانات."""
@@ -395,7 +377,7 @@ st.markdown(
 )
 
 # ===============================
-# نقطة البداية للتطبيق
+# نقطة البداية للتطبيق (دالة main)
 # ===============================
 def main():
     st.set_page_config(layout="wide", page_title="أداة استخلاص وتقارير مالية")
@@ -429,7 +411,6 @@ def main():
             # رسالة بداية واضحة ومطمئنة للمستخدم
             status_text.info(f"⏳ بدء معالجة  {total_files} ملفات.")
             
-            # تهيئة المهام للمعالج المتوازي
             tasks = []
             for uploaded_file in uploaded_files:
                 file_bytes, file_name = uploaded_file.read(), uploaded_file.name
@@ -439,13 +420,11 @@ def main():
             # استخدام ThreadPoolExecutor لتنفيذ 10 مهام API بالتوازي
             MAX_CONCURRENT_WORKERS = 10 
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT_WORKERS, total_files)) as executor:
-                # إرسال جميع المهام
                 future_to_file = {
                     executor.submit(extract_financial_data, bytes, name, type_): name
                     for bytes, name, type_ in tasks
                 }
                 
-                # التكرار على المستقبلات المكتملة وإضافة النتائج
                 for future in concurrent.futures.as_completed(future_to_file):
                     file_name = future_to_file[future]
                     try:
@@ -456,7 +435,6 @@ def main():
                         else:
                             st.warning(f"⚠️ فشل استخلاص البيانات من **{file_name}** بشكل كامل.")
                     except Exception as exc:
-                        # التقاط أي استثناءات مرفوعة داخل extract_financial_data
                         st.error(f"❌ الملف **{file_name}** أثار استثناء أثناء المعالجة: {exc}")
                         
                     processed_count += 1
@@ -485,7 +463,6 @@ def main():
             def get_delala_description(row):
                 delala_num_str = str(row.get('رقم الدلالة', 'غير متوفر')).strip()
                 descriptions = []
-                # معالجة الأرقام المتعددة المفصولة بفاصلة
                 for num_item in delala_num_str.split(','):
                     try:
                         num = int(num_item.strip())
@@ -515,7 +492,6 @@ def main():
             status_placeholder = st.empty()
             for index, row in edited_df.iterrows():
                 row_data = dict(row)
-                # حذف أعمدة مؤقتة قبل الحفظ
                 row_data.pop('مؤشر التشتت', None)
                 row_data.pop('نص الدلالة المطابقة (للمراجعة)', None)
                 if save_to_db(row_data):
@@ -556,5 +532,7 @@ def main():
         else:
             st.error("فشل في استرجاع البيانات من قاعدة البيانات أو لا توجد سجلات.")
 
+# هذا الجزء يضمن تشغيل الكود الرئيسي مرة واحدة
 if __name__ == "__main__":
-    main()
+    # لا نقوم بتشغيل main() هنا، بل داخل كتلة المصادقة في الأعلى.
+    pass
