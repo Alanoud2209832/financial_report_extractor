@@ -11,3 +11,4 @@ hijri-converter
 matplotlib
 Pillow
 streamlit-authenticator
+bcrypt
