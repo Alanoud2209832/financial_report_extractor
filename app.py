@@ -41,6 +41,7 @@ authenticator = stauth.Authenticate(
     'app_cookie_name',  # اسم الكوكيز
     'random_signature_key', # مفتاح سري لتوقيع الجلسة
     cookie_expiry_days=30
+    )
     # ------------------ LOGIN WIDGET ----------------------------
 # عرض نموذج تسجيل الدخول
 name, authentication_status, username = authenticator.login('Login', 'main')
