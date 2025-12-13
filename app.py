@@ -1,4 +1,4 @@
-# app.py (النسخة النهائية المعدلة للعمل مع Gemini 2.5 Flash API)
+# app.py (النسخة النهائية المعدلة لتحسين موثوقية استخلاص JSON)
 
 import streamlit as st
 import pandas as pd
@@ -31,12 +31,10 @@ except ImportError:
 # ===============================
 load_dotenv()
 
-# استخدام gemini-2.5-flash كنموذج افتراضي
 MODEL_NAME = os.getenv("MODEL_NAME", 'gemini-2.5-flash') 
 
 # تهيئة العميل 
 try:
-    # يجب التأكد من تعيين مفتاح API كمتغير بيئة: GEMINI_API_KEY
     client = genai.Client()
 except Exception as e:
     st.error(f"❌ خطأ في تهيئة Gemini Client: {e}")
@@ -70,7 +68,7 @@ DELALAT_MAPPING = {
 }
 
 # =================================================================================
-# تعليمات الاستخلاص للنظام (SYSTEM_PROMPT)
+# التعديل الرئيسي: إضافة مخطط JSON صريح وتخفيف قيود API
 # =================================================================================
 SYSTEM_PROMPT = (
     "أنت نظام استخلاص بيانات آلي (Gemini API) فائق الدقة. مهمتك هي قراءة الوثيقة المرفقة (PDF/صورة) "
@@ -105,7 +103,18 @@ SYSTEM_PROMPT = (
     "10: تفويض أجنبي على حساب بنكي عائد لكيان تجاري وتمكينه من الحساب بشكل كامل دون وجود مبرر أو غرض واضح. \n"
     "11: فتح عدة حسابات الفروع كيان تجاري لنفس النشاط دون وجود ارتباط واضح بين هذه الحسابات، نظراً لإدارة الحساب الخاص بالفرع من قبل المقيم. \n"
 
-    "أجب فقط بـ JSON نظيف دون أي نص إضافي أو تنسيق Markdown (مثل ```json...```). "
+    "**المخرج المطلوب (Output Format):** "
+    "يجب أن تكون الإجابة الوحيدة هي كائن JSON، محاطة بـ \`\`\`json و \`\`\`، ويجب أن تحتوي على جميع المفاتيح التالية (حتى لو كانت القيمة 'غير متوفر'). يجب استبدال 'القيمة' بالقيمة المستخلصة من المستند:"
+    "\n\n```json\n"
+    "{\n"
+    '"رقم الصادر": "القيمة", "تاريخ الصادر": "القيمة", "اسم المشتبه به": "القيمة", "رقم الهوية": "القيمة",\n'
+    '"الجنسية": "القيمة", "تاريخ الميلاد الوافد": "القيمة", "تاريخ الدخول": "القيمة", "الحالة الاجتماعية": "القيمة",\n'
+    '"المهنة": "القيمة", "رقم الجوال": "القيمة", "المدينة": "القيمة", "رصيد الحساب": "القيمة", "الدخل السنوي": "القيمة",\n'
+    '"رقم الوارد": "القيمة", "تاريخ الوارد": "القيمة", "رقم صاحب العمل/ السجل التجاري": "القيمة",\n'
+    '"سبب الاشتباه": "القيمة (النص الكامل)", "تاريخ الدارسة من": "القيمة", "تاريخ الدراسة الى": "القيمة",\n'
+    '"إجمالي إيداع الدراسة": "القيمة", "رقم الدلالة": "القيمة (رقم فقط)"\n'
+    "}\n"
+    "```"
 )
 # =================================================================================
 # نهاية تعليمات النظام
@@ -207,22 +216,33 @@ def extract_financial_data(file_bytes, file_name, file_type):
             response = client.models.generate_content(
                 model=MODEL_NAME,
                 contents=content_parts,
+                # إزالة response_mime_type="application/json" لزيادة المرونة
                 config=genai.types.GenerateContentConfig(
-                    response_mime_type="application/json", 
-                    temperature=0.0
+                   temperature=0.0
                 )
             )
 
-            # 3. استخراج النص (نتوقع JSON نظيف)
-            json_text = response.text
+            # 3. استخراج النص (نبحث عن كتلة JSON)
+            json_text_raw = response.text
             
-            # 4. تحليل JSON
+            # 4. تنظيف النص واستخراج كتلة JSON باستخدام regex
+            # نبحث عن أي كتلة تبدأ بـ { وتنتهي بـ } داخل أو بدون ```json
+            match = re.search(r'```json\s*(\{[\s\S]*?\})\s*```', json_text_raw, re.DOTALL)
+            if match:
+                json_text = match.group(1)
+            else:
+                # إذا لم يتم العثور على كتلة JSON مع ```json، نحاول تحليل النص بالكامل كـ JSON
+                json_text = json_text_raw
+
+            # 5. تحليل JSON
             try:
+                # محاولة تحميل JSON
                 extracted_data = json.loads(json_text)
             except Exception as e_json:
+                # نرفع استثناءً ليلتقطه ThreadPoolExecutor في دالة main
                 raise ValueError(f"فشل تحليل JSON: {e_json} - النص: {json_text[:200]}") 
 
-            # 5. التنظيف والإضافات
+            # 6. التنظيف والإضافات
             extracted_data = pre_process_data_fix_dates(extracted_data)
             extracted_data['اسم الملف'] = file_name
             
@@ -230,7 +250,7 @@ def extract_financial_data(file_bytes, file_name, file_type):
             extracted_data['وقت الاستخلاص'] = pd.Timestamp.now(tz=riyadh_tz).strftime("%Y-%m-%d %H:%M:%S")
             extracted_data['مؤشر التشتت'] = check_for_suspicion(extracted_data)
 
-            # 6. تأكد من وجود كل الحقول الأساسية
+            # 7. تأكد من وجود كل الحقول الأساسية
             for fld in REPORT_FIELDS_ARABIC:
                 if fld not in extracted_data:
                     extracted_data[fld] = "غير متوفر"
@@ -246,6 +266,7 @@ def extract_financial_data(file_bytes, file_name, file_type):
                 time.sleep(wait_time)
                 continue 
             else:
+                # نرفع استثناءً ليتم الإبلاغ عنه في دالة main
                 raise RuntimeError(f"خطأ API: {e}")
                 
         except Exception as e:
@@ -255,12 +276,13 @@ def extract_financial_data(file_bytes, file_name, file_type):
                 time.sleep(wait_time)
                 continue
             else:
+                # نرفع استثناءً ليتم الإبلاغ عنه في دالة main
                 raise Exception(f"خطأ غير متوقع: {e}")
                 
     return None
 
 # ===============================
-# وظائف التقرير وواجهة المستخدم
+# وظائف التقرير وواجهة المستخدم (بدون تغيير)
 # ===============================
 def create_final_report_from_db(records, column_names):
     """إنشاء ملف Excel قابل للتحميل من بيانات قاعدة البيانات."""
