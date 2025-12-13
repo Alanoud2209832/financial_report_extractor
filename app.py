@@ -1,5 +1,6 @@
 # app.py (النسخة النهائية المعدلة لتحسين موثوقية استخلاص JSON)
-
+import streamlit as st
+import streamlit_authenticator as stauth
 import streamlit as st
 import pandas as pd
 import json
@@ -26,6 +27,50 @@ except ImportError:
     def fetch_all_reports(): return None, None
     def initialize_db(): pass
 
+names = ["Alanoud Sultan", "Financial Guest"]
+usernames = ["Alanoud", "guest"]
+
+# كلمات المرور المشفرة (hashed passwords) لكلمات المرور: "Alanoud123" و "Guestpass"
+# يجب أن تكون كلمات المرور مشفرة لأمان أفضل.
+hashed_passwords = stauth.Hasher(['Alanoud123', 'Guestpass']).generate()
+
+authenticator = stauth.Authenticate(
+    names,
+    usernames,
+    hashed_passwords,
+    'app_cookie_name',  # اسم الكوكيز
+    'random_signature_key', # مفتاح سري لتوقيع الجلسة
+    cookie_expiry_days=30
+    # ------------------ LOGIN WIDGET ----------------------------
+# عرض نموذج تسجيل الدخول
+name, authentication_status, username = authenticator.login('Login', 'main')
+
+# حالة عدم المصادقة: إظهار خطأ وإيقاف الكود
+if authentication_status == False:
+    st.error('Username/password is incorrect')
+    st.stop()
+
+# حالة انتظار الإدخال: إظهار تحذير وإيقاف الكود
+if authentication_status == None:
+    st.warning('Please enter your username and password')
+    st.stop()
+# ------------------------------------------------------------
+
+# ------------------ START OF PROTECTED APP CODE ------------------
+# يتم تنفيذ هذا الكود فقط إذا كانت authentication_status == True
+if authentication_status:
+    # زر تسجيل الخروج
+    authenticator.logout('Logout', 'sidebar')
+    
+    # رسالة ترحيب في الشريط الجانبي
+    st.sidebar.title(f"Welcome {name}")
+    
+    # ------------------ هنا يجب أن يبدأ كل كود تطبيقك الأساسي ------------------
+    # (أي كل كود معالجة ملفات PDF، وظيفة رفع الملفات، st.title الخاص بالتطبيق)
+
+    # مثال: (استبدليه بالكود الحالي لتطبيقك)
+    st.title("Financial Report Extractor") 
+    # ... بقية كود التطبيق لديكِ (الذي يعالج ملفات PDF)...
 # ===============================
 # 1. إعدادات API 
 # ===============================
