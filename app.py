@@ -30,13 +30,20 @@ except ImportError:
 # ===============================
 # 1. إعداد المصادقة المخصصة (Authentication)
 # ===============================
+# ... (بعد الاستيرادات)
+
+# ===============================
+# 1. إعداد المصادقة المخصصة (Authentication)
+# ===============================
+names = ["Alanoud Sultan", "Financial Guest"]
 usernames = ["Alanoud", "guest"]
 
-# كلمات مرور واضحة (سنقوم بتشفيرها مباشرة)
+# كلمات مرور واضحة
 plain_passwords = ['Alanoud123', 'Guestpass']
 
-# ------------------ التشفير باستخدام bcrypt مباشرة -------------------
-# هذا التشفير يعطينا نفس النتيجة ولكن يزيل الاعتماد على دالة Hasher()
+# ------------------ التشفير باستخدام bcrypt -------------------
+import bcrypt # تأكدي أن هذا الاستيراد تم في بداية الملف أيضاً
+
 hashed_passwords = []
 for password in plain_passwords:
     # تشفير كلمة المرور (يجب أن تكون بايت)
@@ -47,11 +54,13 @@ for password in plain_passwords:
 authenticator = stauth.Authenticate(
     names,
     usernames,
-    hashed_passwords,
-    'app_cookie_name',  # اسم الكوكيز
-    'random_signature_key', # مفتاح سري لتوقيع الجلسة
+    hashed_passwords, 
+    'app_cookie_name',  
+    'random_signature_key', 
     cookie_expiry_days=30
 )
+
+# ... (بقية كود المصادقة مثل authenticator.login)
 
 # ------------------ LOGIN WIDGET ----------------------------
 # عرض نموذج تسجيل الدخول
