@@ -1,4 +1,4 @@
-# app.py (النسخة النهائية المعدلة للعمل مع Gemini 2.5 Flash API)
+# app.py 
 
 import streamlit as st
 import pandas as pd
@@ -9,7 +9,7 @@ import os
 import re
 import pytz
 import time
-import concurrent.futures # <--- إضافة مهمة للمعالجة المتوازية
+import concurrent.futures
 from dotenv import load_dotenv
 
 # استيراد مكتبات Gemini
@@ -31,10 +31,10 @@ except ImportError:
 # ===============================
 load_dotenv()
 
-# قراءة اسم النموذج من ملف .env (سيكون gemini-2.5-flash)
+
 MODEL_NAME = os.getenv("MODEL_NAME", 'gemini-2.5-flash')
 
-# تهيئة العميل (يقرأ المفتاح تلقائياً من متغير GEMINI_API_KEY في ملف .env)
+# تهيئة العميل 
 try:
     client = genai.Client()
 except Exception as e:
@@ -135,7 +135,7 @@ def check_for_suspicion(data):
             parts = re.split(r'[/\-.]', date_str_en)
             year_str = parts[0]
             year = int(year_str) if year_str.isdigit() else 0
-            if year > 100 and year < 1400: # افتراض أن التواريخ الهجرية هي 1300-1500
+            if year > 100 and year < 1400: 
                 suspicion_indicator += f"🔴 ({field}: سنة غير طبيعية) "
         except Exception:
             pass
@@ -148,7 +148,7 @@ def check_for_suspicion(data):
     return suspicion_indicator.strip() or "✅ سليم"
 
 # ===============================
-# 3. دالة الاستخلاص عبر Gemini API (مُعاد بناؤها ومُعدلة للعمل المتوازي)
+# 3. دالة الاستخلاص عبر Gemini API
 # ===============================
 def extract_financial_data(file_bytes, file_name, file_type):
     """يستدعي Gemini API ليُرجع JSON مطابق للمخطط."""
@@ -158,9 +158,8 @@ def extract_financial_data(file_bytes, file_name, file_type):
     MAX_RETRIES = 3
     INITIAL_WAIT_SECONDS = 5
     
-    # 1. إعداد محتوى الملف (Gemini API يستخدم genai.types.Part)
+    # 1. إعداد محتوى الملف 
     
-    # تحديد نوع MIME الصحيح للملف
     mime_type_map = {
         'pdf': "application/pdf",
         'jpg': "image/jpeg",
@@ -169,14 +168,13 @@ def extract_financial_data(file_bytes, file_name, file_type):
     }
     mime_type = mime_type_map.get(file_type.lower(), "application/octet-stream")
 
-    # إنشاء كائن الجزء (Part) من البايتات ونوع MIME
     try:
         file_part = genai.types.Part.from_bytes(
             data=file_bytes,
             mime_type=mime_type
         )
     except Exception as e:
-        # لا نستخدم st.error داخل دالة التنفيذ المتوازي، بل نرجع None ليتم تسجيل الخطأ في main
+        
         return None
 
     # بناء قائمة محتوى الرسالة
@@ -199,7 +197,7 @@ def extract_financial_data(file_bytes, file_name, file_type):
                 )
             )
 
-            # 3. استخراج النص (نتوقع JSON نظيف)
+            # 3. استخراج النص 
             json_text = response.text
             
             # 4. تحليل JSON
@@ -217,7 +215,7 @@ def extract_financial_data(file_bytes, file_name, file_type):
             extracted_data['وقت الاستخلاص'] = pd.Timestamp.now(tz=riyadh_tz).strftime("%Y-%m-%d %H:%M:%S")
             extracted_data['مؤشر التشتت'] = check_for_suspicion(extracted_data)
 
-            # 6. تأكد من وجود كل الحقول الأساسية
+            
             for fld in REPORT_FIELDS_ARABIC:
                 if fld not in extracted_data:
                     extracted_data[fld] = "غير متوفر"
@@ -243,7 +241,7 @@ def extract_financial_data(file_bytes, file_name, file_type):
                 time.sleep(wait_time)
                 continue
             else:
-                # نرفع استثناءً ليتم الإبلاغ عنه في دالة main
+                # نرفع استثناءً ليتم الإبلاغ عنه في دالة 
                 raise Exception(f"خطأ غير متوقع: {e}")
                 
     return None
@@ -295,7 +293,7 @@ def display_basic_stats():
 
 
 # ===============================
-# CSS وواجهة Streamlit (بدون تغيير)
+# CSS 
 # ===============================
 st.markdown(
     """
@@ -314,7 +312,7 @@ st.markdown(
 )
 
 # ===============================
-# نقطة البداية للتطبيق (تم تعديل قسم المعالجة لإضافة التوازي)
+# نقطة البداية للتطبيق 
 # ===============================
 def main():
     st.set_page_config(layout="wide", page_title="أداة استخلاص وتقارير مالية")
@@ -345,21 +343,20 @@ def main():
             processed_count = 0
             all_extracted_data = []
 
-            # رسالة بداية واضحة ومطمئنة للمستخدم
+     
             status_text.info(f"⏳ بدء معالجة  {total_files} .")
             
-            # تهيئة المهام للمعالج المتوازي (يجب قراءة البايتات هنا)
+      
             tasks = []
             for uploaded_file in uploaded_files:
                 file_bytes, file_name = uploaded_file.read(), uploaded_file.name
                 file_type = file_name.split('.')[-1].lower()
                 tasks.append((file_bytes, file_name, file_type))
 
-            # استخدام ThreadPoolExecutor لتنفيذ 10 مهام API بالتوازي
-            # الحد الأقصى للعمال هو 10 لتقليل الحمل على الجهاز/الذاكرة، ويمكن زيادته حسب الرغبة
+      
             MAX_CONCURRENT_WORKERS = 10 
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT_WORKERS, total_files)) as executor:
-                # إرسال جميع المهام وتعيين المستقبلات (Futures) إلى أسماء الملفات لتتبع أفضل
+              
                 future_to_file = {
                     executor.submit(extract_financial_data, bytes, name, type_): name
                     for bytes, name, type_ in tasks
@@ -376,7 +373,6 @@ def main():
                         else:
                             st.warning(f"⚠️ فشل استخلاص البيانات من **{file_name}** بشكل كامل.")
                     except Exception as exc:
-                        # التقاط أي استثناءات مرفوعة داخل extract_financial_data
                         st.error(f"❌ الملف **{file_name}** أثار استثناء أثناء المعالجة: {exc}")
                     
                     processed_count += 1
@@ -393,7 +389,6 @@ def main():
                 status_text.error("❌ فشل استخلاص أي بيانات.")
                 progress_bar.empty()
 
-    # جدول قابل للتعديل
     if not st.session_state['extracted_data_df'].empty:
         st.subheader("✏️ جميع البيانات المستخلصة (قابلة للتعديل)")
 
