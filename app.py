@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai.errors import APIError as GeminiAPIError
 
-# محاولة استيراد الدوال من db.py
+# محاولة استيراد الدوال من db.py (يجب أن يكون ملف db.py موجوداً بجانبه)
 try:
     from db import save_to_db, fetch_all_reports, initialize_db
 except ImportError:
@@ -31,10 +31,12 @@ except ImportError:
 # ===============================
 load_dotenv()
 
-MODEL_NAME = os.getenv("MODEL_NAME", 'gemini-2.5-flash')
+# استخدام gemini-2.5-flash كنموذج افتراضي
+MODEL_NAME = os.getenv("MODEL_NAME", 'gemini-2.5-flash') 
 
 # تهيئة العميل 
 try:
+    # يجب التأكد من تعيين مفتاح API كمتغير بيئة: GEMINI_API_KEY
     client = genai.Client()
 except Exception as e:
     st.error(f"❌ خطأ في تهيئة Gemini Client: {e}")
@@ -68,7 +70,7 @@ DELALAT_MAPPING = {
 }
 
 # =================================================================================
-# التعديل: إزالة التوجيه بالبحث عن حقول داخل نص "سبب الاشتباه"
+# تعليمات الاستخلاص للنظام (SYSTEM_PROMPT)
 # =================================================================================
 SYSTEM_PROMPT = (
     "أنت نظام استخلاص بيانات آلي (Gemini API) فائق الدقة. مهمتك هي قراءة الوثيقة المرفقة (PDF/صورة) "
@@ -106,13 +108,14 @@ SYSTEM_PROMPT = (
     "أجب فقط بـ JSON نظيف دون أي نص إضافي أو تنسيق Markdown (مثل ```json...```). "
 )
 # =================================================================================
-# نهاية التعديل
+# نهاية تعليمات النظام
 # =================================================================================
 
 # ===============================
-# دوال مساعدة (بدون تغيير)
+# دوال مساعدة
 # ===============================
 def arabic_to_english_numbers(text):
+    """تحويل الأرقام العربية في النص إلى أرقام إنجليزية."""
     if not isinstance(text, str):
         return text
     arabic_map = {'٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
@@ -120,10 +123,12 @@ def arabic_to_english_numbers(text):
     return text.translate(str.maketrans(arabic_map))
 
 def pre_process_data_fix_dates(data):
+    """تنظيف وتنسيق بيانات التاريخ."""
     start_key = "تاريخ الدارسة من"
     end_key = "تاريخ الدراسة الى"
     start_date_value = data.get(start_key, "")
     if start_date_value:
+        # محاولة فصل تاريخين مدمجين
         clean_value = re.sub(r'[^\d]', '', start_date_value).strip()
         if len(clean_value) == 16:
             date1_clean = clean_value[:8]
@@ -136,16 +141,19 @@ def pre_process_data_fix_dates(data):
     return data
 
 def check_for_suspicion(data):
+    """إضافة مؤشرات تحذير بناءً على البيانات المستخلصة."""
     suspicion_indicator = ""
     date_fields = ["تاريخ الصادر", "تاريخ الوارد"]
     for field in date_fields:
         date_val = data.get(field, "")
         try:
             date_str_en = arabic_to_english_numbers(str(date_val))
+            # تقسيم التاريخ لاستخلاص السنة
             parts = re.split(r'[/\-.]', date_str_en)
             year_str = parts[0]
             year = int(year_str) if year_str.isdigit() else 0
-            if year > 100 and year < 1400: # افتراض أن التواريخ الهجرية هي 1300-1500
+            # التحقق من أن السنة ليست هجرية (للتنبيه فقط)
+            if year > 100 and year < 1400: 
                 suspicion_indicator += f"🔴 ({field}: سنة غير طبيعية) "
         except Exception:
             pass
@@ -153,12 +161,13 @@ def check_for_suspicion(data):
     financial_fields = ["رصيد الحساب", "الدخل السنوي", "إجمالي إيداع الدراسة"]
     for field in financial_fields:
         val = data.get(field, "")
-        if str(val).strip() in ['0', '0.00', '٠', '٠,٠٠']:
-            suspicion_indicator += f"⚠️ ({field} = 0) "
+        # التحقق من أن القيمة المالية صفر أو فارغة
+        if str(val).strip() in ['0', '0.00', '٠', '٠,٠٠', 'غير متوفر']:
+            suspicion_indicator += f"⚠️ ({field} = 0/غير متوفر) "
     return suspicion_indicator.strip() or "✅ سليم"
 
 # ===============================
-# 3. دالة الاستخلاص عبر Gemini API (بدون تغيير)
+# 3. دالة الاستخلاص عبر Gemini API
 # ===============================
 def extract_financial_data(file_bytes, file_name, file_type):
     """يستدعي Gemini API ليُرجع JSON مطابق للمخطط."""
@@ -167,8 +176,6 @@ def extract_financial_data(file_bytes, file_name, file_type):
 
     MAX_RETRIES = 3
     INITIAL_WAIT_SECONDS = 5
-    
-    # 1. إعداد محتوى الملف (Gemini API يستخدم genai.types.Part)
     
     # تحديد نوع MIME الصحيح للملف
     mime_type_map = {
@@ -186,7 +193,6 @@ def extract_financial_data(file_bytes, file_name, file_type):
             mime_type=mime_type
         )
     except Exception as e:
-        # لا نستخدم st.error داخل دالة التنفيذ المتوازي، بل نرجع None ليتم تسجيل الخطأ في main
         return None
 
     # بناء قائمة محتوى الرسالة
@@ -214,7 +220,6 @@ def extract_financial_data(file_bytes, file_name, file_type):
             try:
                 extracted_data = json.loads(json_text)
             except Exception as e_json:
-                # نرفع استثناءً ليلتقطه ThreadPoolExecutor في دالة main
                 raise ValueError(f"فشل تحليل JSON: {e_json} - النص: {json_text[:200]}") 
 
             # 5. التنظيف والإضافات
@@ -241,7 +246,6 @@ def extract_financial_data(file_bytes, file_name, file_type):
                 time.sleep(wait_time)
                 continue 
             else:
-                # نرفع استثناءً ليتم الإبلاغ عنه في دالة main
                 raise RuntimeError(f"خطأ API: {e}")
                 
         except Exception as e:
@@ -251,15 +255,15 @@ def extract_financial_data(file_bytes, file_name, file_type):
                 time.sleep(wait_time)
                 continue
             else:
-                # نرفع استثناءً ليتم الإبلاغ عنه في دالة main
                 raise Exception(f"خطأ غير متوقع: {e}")
                 
     return None
 
 # ===============================
-# وظائف التقرير وواجهة المستخدم (بدون تغيير)
+# وظائف التقرير وواجهة المستخدم
 # ===============================
 def create_final_report_from_db(records, column_names):
+    """إنشاء ملف Excel قابل للتحميل من بيانات قاعدة البيانات."""
     import xlsxwriter
     if not records:
         st.warning("لا توجد بيانات في قاعدة البيانات لتصديرها.")
@@ -290,6 +294,7 @@ def create_final_report_from_db(records, column_names):
 
 
 def display_basic_stats():
+    """عرض الإحصائيات الأساسية للسجلات المحفوظة."""
     st.markdown("---")
     st.subheader("إحصائيات عامة 📈")
     report_data = fetch_all_reports()
@@ -303,7 +308,7 @@ def display_basic_stats():
 
 
 # ===============================
-# CSS وواجهة Streamlit (بدون تغيير)
+# CSS وواجهة Streamlit
 # ===============================
 st.markdown(
     """
@@ -322,7 +327,7 @@ st.markdown(
 )
 
 # ===============================
-# نقطة البداية للتطبيق (بدون تغيير)
+# نقطة البداية للتطبيق
 # ===============================
 def main():
     st.set_page_config(layout="wide", page_title="أداة استخلاص وتقارير مالية")
@@ -354,9 +359,9 @@ def main():
             all_extracted_data = []
 
             # رسالة بداية واضحة ومطمئنة للمستخدم
-            status_text.info(f"⏳ بدء معالجة  {total_files} .")
+            status_text.info(f"⏳ بدء معالجة  {total_files} ملفات.")
             
-            # تهيئة المهام للمعالج المتوازي (يجب قراءة البايتات هنا)
+            # تهيئة المهام للمعالج المتوازي
             tasks = []
             for uploaded_file in uploaded_files:
                 file_bytes, file_name = uploaded_file.read(), uploaded_file.name
@@ -366,7 +371,7 @@ def main():
             # استخدام ThreadPoolExecutor لتنفيذ 10 مهام API بالتوازي
             MAX_CONCURRENT_WORKERS = 10 
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT_WORKERS, total_files)) as executor:
-                # إرسال جميع المهام وتعيين المستقبلات (Futures) إلى أسماء الملفات لتتبع أفضل
+                # إرسال جميع المهام
                 future_to_file = {
                     executor.submit(extract_financial_data, bytes, name, type_): name
                     for bytes, name, type_ in tasks
@@ -442,7 +447,7 @@ def main():
             status_placeholder = st.empty()
             for index, row in edited_df.iterrows():
                 row_data = dict(row)
-                # حذف أعمدة مؤقتة
+                # حذف أعمدة مؤقتة قبل الحفظ
                 row_data.pop('مؤشر التشتت', None)
                 row_data.pop('نص الدلالة المطابقة (للمراجعة)', None)
                 if save_to_db(row_data):
