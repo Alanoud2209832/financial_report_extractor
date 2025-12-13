@@ -30,12 +30,19 @@ except ImportError:
 # ===============================
 # 1. إعداد المصادقة المخصصة (Authentication)
 # ===============================
-names = ["Alanoud Sultan", "Financial Guest"]
 usernames = ["Alanoud", "guest"]
 
-# كلمات المرور المشفرة (hashed passwords) لكلمات المرور: "Alanoud123" و "Guestpass"
-# يتم استخدام Hasher مرة واحدة لتشفير كلمات المرور
-hashed_passwords = stauth.Hasher(passwords=['Alanoud123', 'Guestpass']).generate()
+# كلمات مرور واضحة (سنقوم بتشفيرها مباشرة)
+plain_passwords = ['Alanoud123', 'Guestpass']
+
+# ------------------ التشفير باستخدام bcrypt مباشرة -------------------
+# هذا التشفير يعطينا نفس النتيجة ولكن يزيل الاعتماد على دالة Hasher()
+hashed_passwords = []
+for password in plain_passwords:
+    # تشفير كلمة المرور (يجب أن تكون بايت)
+    hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+    hashed_passwords.append(hashed.decode('utf-8'))
+# ------------------------------------------------------------
 
 authenticator = stauth.Authenticate(
     names,
