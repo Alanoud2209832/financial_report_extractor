@@ -3,6 +3,7 @@ import streamlit as st
 import streamlit_authenticator as stauth
 import pandas as pd
 import json
+import bcrypt
 import io
 import base64
 import os
